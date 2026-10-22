@@ -42,3 +42,5 @@ python scripts/build.py eri-c3-voice
 | Nut am luong | 10 |
 
 Nho noi L/R cua INMP441 xuong GND.
+
+Nhan nut am luong de tang 10% moi lan; khi dang o 100%, lan nhan tiep theo quay ve 10%.

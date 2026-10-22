@@ -9,6 +9,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
+#include <algorithm>
 #include <string>
 
 #define TAG "EriC3Voice"
@@ -73,16 +74,12 @@ private:
 
         volume_button_.OnClick([this]() {
             auto codec = GetAudioCodec();
-            int volume = codec->output_volume() + 10;
-            if (volume > 100) volume = 100;
-            codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification("Volume " + std::to_string(volume));
-        });
-
-        volume_button_.OnLongPress([this]() {
-            auto codec = GetAudioCodec();
-            int volume = codec->output_volume() - 10;
-            if (volume < 0) volume = 0;
+            constexpr int kVolumeStep = 10;
+            constexpr int kMinimumVolume = 10;
+            constexpr int kMaximumVolume = 100;
+            int volume = codec->output_volume() >= kMaximumVolume
+                             ? kMinimumVolume
+                             : std::min(codec->output_volume() + kVolumeStep, kMaximumVolume);
             codec->SetOutputVolume(volume);
             GetDisplay()->ShowNotification("Volume " + std::to_string(volume));
         });
