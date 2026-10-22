@@ -647,6 +647,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_ZHENGCHEN_CAM
         bool "Zhengchen AI Camera Wi-Fi (征辰科技)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ERI_C3_VOICE
+        bool "Eri C3 Voice"
+        depends on IDF_TARGET_ESP32C3
 endchoice
 
 config RESPEAKER_I2S_EXTERNAL_CLOCK_48K
