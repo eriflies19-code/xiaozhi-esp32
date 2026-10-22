@@ -43,6 +43,12 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
+if(CONFIG_BOARD_TYPE_ERI_C3_VOICE_RADIO)
+    list(APPEND SOURCES
+        "boards/eri-c3-voice-radio/radio_mode.cc"
+    )
+endif()
+
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
 # Add board common files
@@ -901,6 +907,10 @@ elseif(CONFIG_BOARD_TYPE_ERI_C3_VOICE)
     set(BOARD_DIR "eri-c3-voice")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
     set(BUILTIN_ICON_FONT font_material_symbols_14_1)
+elseif(CONFIG_BOARD_TYPE_ERI_C3_VOICE_RADIO)
+    set(BOARD_DIR "eri-c3-voice-radio")
+    set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
+    set(BUILTIN_ICON_FONT font_material_symbols_14_1)
 endif()
 
 if(NOT BOARD_DIR AND NOT CMAKE_BUILD_EARLY_EXPANSION)
@@ -1102,6 +1112,12 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 endif()
 
 set(MAIN_PRIV_REQUIRES_EXTRA "")
+if(CONFIG_BOARD_TYPE_ERI_C3_VOICE_RADIO OR BOARD_NAME STREQUAL "eri-c3-voice-radio")
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        espressif__esp_audio_codec
+        espressif__esp_audio_effects
+    )
+endif()
 if(CONFIG_XIAOZHI_NETWORK_ETHERNET AND CONFIG_XIAOZHI_ETH_PHY_IP101)
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA espressif__ip101)
 endif()
@@ -1153,6 +1169,7 @@ idf_component_register(SRCS ${SOURCES}
                         efuse
                         bt
                         fatfs
+                        esp_http_client
                         xiaozhi-fonts
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )

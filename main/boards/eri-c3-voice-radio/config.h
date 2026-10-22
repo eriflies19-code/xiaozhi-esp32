@@ -1,0 +1,25 @@
+#ifndef _BOARD_CONFIG_H_
+#define _BOARD_CONFIG_H_
+
+#include <driver/gpio.h>
+
+#define AUDIO_INPUT_SAMPLE_RATE  16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
+
+#define AUDIO_I2S_GPIO_BCLK GPIO_NUM_2
+#define AUDIO_I2S_GPIO_WS   GPIO_NUM_1
+#define AUDIO_I2S_GPIO_DOUT GPIO_NUM_3
+#define AUDIO_I2S_GPIO_DIN  GPIO_NUM_8
+
+#define CHAT_BUTTON_GPIO    GPIO_NUM_4
+#define VOLUME_BUTTON_GPIO  GPIO_NUM_10
+
+#define DISPLAY_SDA_PIN     GPIO_NUM_21
+#define DISPLAY_SCL_PIN     GPIO_NUM_20
+#define DISPLAY_WIDTH       128
+#define DISPLAY_HEIGHT      64
+#define DISPLAY_MIRROR_X    false
+#define DISPLAY_MIRROR_Y    false
+#define DISPLAY_I2C_ADDR    0x3C
+
+#endif
