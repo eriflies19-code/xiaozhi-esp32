@@ -9,7 +9,6 @@
 #include <esp_ae_rate_cvt.h>
 #include <esp_http_client.h>
 #include <esp_heap_caps.h>
-#include <esp_http_client.h>
 #include <esp_crt_bundle.h>
 #include <esp_log.h>
 #include <freertos/stream_buffer.h>
@@ -19,7 +18,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <vector>
 
 #define TAG "InternetRadio"
@@ -273,7 +271,18 @@ void Mp3PlaybackTask(void* arg) {
                 .decoded_size = 0,
             };
             const auto result = esp_audio_simple_dec_process(decoder, &raw, &frame);
-            if (result != ESP_AUDIO_ERR_OK && result != ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+            if (result == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+                if (frame.needed_size <= frame.len ||
+                    frame.needed_size % sizeof(int16_t) != 0) {
+                    ESP_LOGE(TAG, "MP3 decoder reported invalid output size: %u",
+                             frame.needed_size);
+                    stop_radio.store(true);
+                    break;
+                }
+                decoded.resize(frame.needed_size / sizeof(int16_t));
+                continue;
+            }
+            if (result != ESP_AUDIO_ERR_OK) {
                 ESP_LOGW(TAG, "MP3 decode returned %d", result);
                 break;
             }

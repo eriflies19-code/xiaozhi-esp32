@@ -43,12 +43,6 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-if(CONFIG_BOARD_TYPE_ERI_C3_VOICE_RADIO)
-    list(APPEND SOURCES
-        "boards/eri-c3-voice-radio/radio_mode.cc"
-    )
-endif()
-
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
 # Add board common files

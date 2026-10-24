@@ -12,8 +12,9 @@ Select `eri-c3-voice-radio` in the board build script:
 python scripts/build.py eri-c3-voice-radio
 ```
 
-At startup, click GPIO4 for XiaoZhi or GPIO10 for Internet Radio. If no button
-is clicked within 10 seconds, the firmware starts XiaoZhi.
+At startup, the OLED shows the mode choices. Click GPIO4 for XiaoZhi or GPIO10
+for Internet Radio. If no button is clicked within 10 seconds, the firmware
+starts XiaoZhi.
 
 Radio mode currently supports Wi-Fi configured through XiaoZhi's existing Wi-Fi
 manager, five built-in MP3 stations, GPIO4 for the next station, and GPIO10 for

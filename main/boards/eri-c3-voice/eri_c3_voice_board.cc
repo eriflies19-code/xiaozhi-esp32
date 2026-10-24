@@ -4,12 +4,12 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "eri_mode.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
-#include <algorithm>
 #include <string>
 
 #define TAG "EriC3Voice"
@@ -57,13 +57,16 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
 
-        display_ = new OledDisplay(panel_io, panel,
-                                   DISPLAY_WIDTH, DISPLAY_HEIGHT,
+        display_ = new OledDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                    DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeButtons() {
+        // GPIO4: bam = chon/ doi dai / bat tat hoi thoai, giu 2 giay = ve menu
         chat_button_.OnClick([this]() {
+            if (EriMode::HandleChatClick()) {
+                return;  // dang o menu hoac radio
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
@@ -71,22 +74,35 @@ private:
             }
             app.ToggleChatState();
         });
+        chat_button_.OnLongPress([]() { EriMode::HandleChatLongPress(); });
 
+        // GPIO10: bam = doi muc menu / tang am luong, giu = giam am luong
         volume_button_.OnClick([this]() {
+            if (EriMode::HandleVolumeClick()) {
+                return;
+            }
             auto codec = GetAudioCodec();
-            constexpr int kVolumeStep = 10;
-            constexpr int kMinimumVolume = 10;
-            constexpr int kMaximumVolume = 100;
-            int volume = codec->output_volume() >= kMaximumVolume
-                             ? kMinimumVolume
-                             : std::min(codec->output_volume() + kVolumeStep, kMaximumVolume);
+            int volume = codec->output_volume() + 10;
+            if (volume > 100) volume = 100;
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification("Volume " + std::to_string(volume));
+        });
+
+        volume_button_.OnLongPress([this]() {
+            if (EriMode::HandleVolumeLongPress()) {
+                return;
+            }
+            auto codec = GetAudioCodec();
+            int volume = codec->output_volume() - 10;
+            if (volume < 0) volume = 0;
             codec->SetOutputVolume(volume);
             GetDisplay()->ShowNotification("Volume " + std::to_string(volume));
         });
     }
 
 public:
-    EriC3Voice() : chat_button_(CHAT_BUTTON_GPIO), volume_button_(VOLUME_BUTTON_GPIO) {
+    EriC3Voice()
+        : chat_button_(CHAT_BUTTON_GPIO, false, 2000), volume_button_(VOLUME_BUTTON_GPIO) {
         InitializeDisplayI2c();
         InitializeSsd1306Display();
         InitializeButtons();
