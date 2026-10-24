@@ -304,7 +304,7 @@ static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& b
     }
 
     std::string req = "GET " + u.path + " HTTP/1.0\r\nHost: " + u.host +
-                      "\r\nUser-Agent: Mozilla/5.0 (ESP32)\r\nAccept: */*\r\n"
+                      "\r\nUser-Agent: WinampMPEG/5.0\r\nAccept: */*\r\n"
                       "Icy-MetaData: 0\r\nConnection: close\r\n\r\n";
     if (ConnSend(c, req.data(), req.size()) < 0) {
         ConnClose(c);
@@ -438,6 +438,8 @@ static void StreamOnce(int idx, uint32_t gen) {
         std::string v;
         if (HeaderValue(hdr, "transfer-encoding:", v) && strcasestr(v.c_str(), "chunked")) {
             err = "Chunked chua ho tro";
+        } else if (HeaderValue(hdr, "content-type:", v) && strcasestr(v.c_str(), "text/html")) {
+            err = "May chu tra ve trang web";
         } else if (HeaderValue(hdr, "content-type:", v) &&
                    (strcasestr(v.c_str(), "aac") || strcasestr(v.c_str(), "ogg") ||
                     strcasestr(v.c_str(), "mp4") || strcasestr(v.c_str(), "flac"))) {
