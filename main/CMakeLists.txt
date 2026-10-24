@@ -901,10 +901,6 @@ elseif(CONFIG_BOARD_TYPE_ERI_C3_VOICE)
     set(BOARD_DIR "eri-c3-voice")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
     set(BUILTIN_ICON_FONT font_material_symbols_14_1)
-elseif(CONFIG_BOARD_TYPE_ERI_C3_VOICE_RADIO)
-    set(BOARD_DIR "eri-c3-voice-radio")
-    set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
-    set(BUILTIN_ICON_FONT font_material_symbols_14_1)
 endif()
 
 if(NOT BOARD_DIR AND NOT CMAKE_BUILD_EARLY_EXPANSION)
@@ -1106,7 +1102,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 endif()
 
 set(MAIN_PRIV_REQUIRES_EXTRA "")
-if(CONFIG_BOARD_TYPE_ERI_C3_VOICE_RADIO OR BOARD_NAME STREQUAL "eri-c3-voice-radio")
+if(CONFIG_BOARD_TYPE_ERI_C3_VOICE)
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA
         espressif__esp_audio_codec
         espressif__esp_audio_effects
