@@ -166,6 +166,10 @@ bool HandleVolumeLongPress() {
 void RestartToMenu() {
     ESP_LOGI(TAG, "Restarting to show mode menu");
     Board::GetInstance().GetDisplay()->ShowNotification("Ve menu...", 1500);
+    {
+        Settings settings("eri", true);
+        settings.SetInt("mode", 0);
+    }
     vTaskDelay(pdMS_TO_TICKS(600));
     esp_restart();
 }

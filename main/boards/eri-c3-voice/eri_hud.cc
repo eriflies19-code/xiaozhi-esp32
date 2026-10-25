@@ -305,7 +305,7 @@ static const ble_uuid128_t kRxUuid = BLE_UUID128_INIT(0x01, 0x00, 0x4c, 0x50, 0x
 static constexpr int kLineMax = 520;
 static QueueHandle_t g_lineq = nullptr;
 static uint16_t g_rx_handle = 0;
-static uint16_t g_conn = BLE_HS_CONN_HANDLE_NONE;
+static std::atomic<uint16_t> g_conn{BLE_HS_CONN_HANDLE_NONE};
 static uint8_t g_own_addr_type = 0;
 static char g_acc[kLineMax];
 static size_t g_acc_n = 0;
@@ -319,7 +319,8 @@ static const char kDevJson[] =
 
 // Gui 1 dong JSON ket thuc '\n' len Android, chia khuc theo MTU
 static void SendLine(const char* s) {
-    if (!g_connected || g_conn == BLE_HS_CONN_HANDLE_NONE) {
+    uint16_t conn = g_conn.load();
+    if (!g_connected.load() || conn == BLE_HS_CONN_HANDLE_NONE) {
         return;
     }
     char frame[600];
@@ -330,22 +331,32 @@ static void SendLine(const char* s) {
     if (len >= static_cast<int>(sizeof(frame))) {
         len = sizeof(frame) - 1;
     }
-    int mtu = ble_att_mtu(g_conn);
+    int mtu = ble_att_mtu(conn);
     int chunk = mtu > 23 ? mtu - 3 : 20;
     chunk = std::min(chunk, 240);
     for (int off = 0; off < len; off += chunk) {
+        if (!g_connected.load() || g_conn.load() != conn) {
+            return;
+        }
         int n = std::min(chunk, len - off);
         for (int attempt = 0; attempt < 5; ++attempt) {
+            if (!g_connected.load() || g_conn.load() != conn) {
+                return;
+            }
             os_mbuf* om = ble_hs_mbuf_from_flat(frame + off, n);
             if (om == nullptr) {
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
-            int rc = ble_gatts_notify_custom(g_conn, g_rx_handle, om);  // om duoc giai phong ben trong
+            int rc = ble_gatts_notify_custom(conn, g_rx_handle, om);  // om duoc giai phong ben trong
             if (rc == 0) {
                 break;
             }
+            if (rc == BLE_HS_ENOTCONN || !g_connected.load() || g_conn.load() != conn) {
+                return;
+            }
             if (rc != BLE_HS_ENOMEM) {
+                ESP_LOGW(TAG, "BLE notify failed: rc=%d", rc);
                 return;
             }
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -422,7 +433,7 @@ static int GapEvent(struct ble_gap_event* ev, void*) {
         case BLE_GAP_EVENT_CONNECT:
             ESP_LOGI(TAG, "BLE connect status=%d", ev->connect.status);
             if (ev->connect.status == 0) {
-                g_conn = ev->connect.conn_handle;
+                g_conn.store(ev->connect.conn_handle);
                 g_connected = true;
             } else {
                 StartAdv();
@@ -431,8 +442,8 @@ static int GapEvent(struct ble_gap_event* ev, void*) {
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "BLE disconnect reason=%d", ev->disconnect.reason);
             g_connected = false;
-            g_dev_pending = false;
             g_conn = BLE_HS_CONN_HANDLE_NONE;
+            g_dev_pending = false;
             StartAdv();
             break;
         case BLE_GAP_EVENT_SUBSCRIBE:
