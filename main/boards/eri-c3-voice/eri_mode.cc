@@ -25,6 +25,10 @@ static std::atomic<int> g_mode{static_cast<int>(Mode::kChat)};
 static std::atomic<int> g_sel{0};          // 0 = Chat AI, 1 = Radio, 2 = WAZE HUD
 static std::atomic<bool> g_touched{false}; // da bam nut -> tat dem nguoc
 static std::atomic<bool> g_confirm{false};
+static std::atomic<uint32_t> g_menu_start_ms{0};  // bo qua nut bam luc moi vao menu
+
+static uint32_t NowMs() { return static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS); }
+static bool MenuSettling() { return NowMs() - g_menu_start_ms.load() < 800; }
 
 static void ShowMenu(int sel, int secs_left) {
     auto display = Board::GetInstance().GetDisplay();
@@ -49,23 +53,29 @@ bool Run() {
     display->SetupUI();  // OledDisplay bo qua neu goi lai lan nua trong Application
 
     int last = 0;
+    bool stay = false;  // nguoi dung chu dong ve menu: cho chon, khong tu vao lai
     {
-        Settings settings("eri", false);
+        Settings settings("eri", true);
         last = settings.GetInt("mode", 0);
+        stay = settings.GetInt("stay", 0) != 0;
+        if (stay) {
+            settings.SetInt("stay", 0);
+        }
     }
     g_sel = (last >= 0 && last < kModeCount) ? last : 0;
     g_touched = false;
     g_confirm = false;
+    g_menu_start_ms = NowMs();
     g_mode = static_cast<int>(Mode::kMenu);
     ESP_LOGI(TAG, "Menu started, last mode=%d", last);
 
     int secs = kMenuSeconds;
     int elapsed_ms = 0;
-    ShowMenu(g_sel, secs);
+    ShowMenu(g_sel, stay ? -1 : secs);
 
     while (!g_confirm) {
         vTaskDelay(pdMS_TO_TICKS(100));
-        if (g_touched) {
+        if (g_touched || stay) {
             continue;  // da bam nut: cho xac nhan, khong tu vao nua
         }
         elapsed_ms += 100;
@@ -106,6 +116,9 @@ bool HandleChatClick() {
     ESP_LOGI(TAG, "HandleChatClick mode=%d", (int)Current());
     switch (Current()) {
         case Mode::kMenu:
+            if (MenuSettling()) {
+                return true;  // bo qua: co the la nhac nut vua giu de ve menu
+            }
             g_touched = true;
             g_confirm = true;
             return true;
@@ -133,6 +146,9 @@ bool HandleVolumeClick() {
     ESP_LOGI(TAG, "HandleVolumeClick mode=%d", (int)Current());
     switch (Current()) {
         case Mode::kMenu:
+            if (MenuSettling()) {
+                return true;
+            }
             g_touched = true;
             g_sel = (g_sel.load() + 1) % kModeCount;
             ShowMenu(g_sel, -1);
@@ -168,7 +184,7 @@ void RestartToMenu() {
     Board::GetInstance().GetDisplay()->ShowNotification("Ve menu...", 1500);
     {
         Settings settings("eri", true);
-        settings.SetInt("mode", 0);
+        settings.SetInt("stay", 1);
     }
     vTaskDelay(pdMS_TO_TICKS(600));
     esp_restart();
