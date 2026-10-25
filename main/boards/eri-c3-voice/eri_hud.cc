@@ -1,5 +1,6 @@
 #include "eri_hud.h"
-#include "eri_hud_icons.h"
+#include "eri_screen.h"
+#include "eri_ui.h"
 
 #include "audio_codec.h"  // chi de lay macro XIAOZHI_I2S_PORT va AUDIO_CODEC_DMA_*
 #include "config.h"
@@ -7,10 +8,8 @@
 #include <cJSON.h>
 #include <driver/i2s_std.h>
 #include <esp_heap_caps.h>
-#include <esp_lcd_panel_ops.h>
 #include <esp_log.h>
 #include <esp_system.h>
-#include <esp_lvgl_port.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -30,177 +29,11 @@
 
 #define TAG "EriHud"
 
-// Tay cam OLED do board tao (eri_c3_voice_board.cc)
-extern esp_lcd_panel_handle_t g_eri_oled_panel;
-
 namespace EriHud {
-
-// ================================================================ khung hinh 1-bit
-// Bo dem theo trang (page) cua SSD1306: byte = (y/8)*128 + x, bit = y%8.
-
-static constexpr int kW = 128;
-static constexpr int kH = 64;
-static uint8_t g_fb[kW * kH / 8];
-static uint8_t g_sent[kW * kH / 8];
-static bool g_color = true;  // true = sang, false = xoa
-
-static inline void Pix(int x, int y) {
-    if (static_cast<unsigned>(x) >= kW || static_cast<unsigned>(y) >= kH) {
-        return;
-    }
-    uint8_t& b = g_fb[(y >> 3) * kW + x];
-    if (g_color) {
-        b |= static_cast<uint8_t>(1u << (y & 7));
-    } else {
-        b &= static_cast<uint8_t>(~(1u << (y & 7)));
-    }
-}
-
-static void Box(int x, int y, int w, int h) {
-    for (int j = 0; j < h; ++j) {
-        for (int i = 0; i < w; ++i) {
-            Pix(x + i, y + j);
-        }
-    }
-}
-
-static void Disc(int cx, int cy, int r) {
-    for (int dy = -r; dy <= r; ++dy) {
-        for (int dx = -r; dx <= r; ++dx) {
-            if (dx * dx + dy * dy <= r * r + r) {
-                Pix(cx + dx, cy + dy);
-            }
-        }
-    }
-}
-
-// Vanh tron do day `t` pixel, ban kinh ngoai r
-static void Ring(int cx, int cy, int r, int t) {
-    int ri = r - t;
-    for (int dy = -r; dy <= r; ++dy) {
-        for (int dx = -r; dx <= r; ++dx) {
-            int d2 = dx * dx + dy * dy;
-            if (d2 <= r * r + r && d2 > ri * ri + ri) {
-                Pix(cx + dx, cy + dy);
-            }
-        }
-    }
-}
-
-static void Frame(int x, int y, int w, int h) {
-    Box(x, y, w, 1);
-    Box(x, y + h - 1, w, 1);
-    Box(x, y, 1, h);
-    Box(x + w - 1, y, 1, h);
-}
-
-static int Edge(int ax, int ay, int bx, int by, int px, int py) {
-    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-}
-
-static void Tri(int x1, int y1, int x2, int y2, int x3, int y3) {
-    int minx = std::min({x1, x2, x3}), maxx = std::max({x1, x2, x3});
-    int miny = std::min({y1, y2, y3}), maxy = std::max({y1, y2, y3});
-    for (int y = miny; y <= maxy; ++y) {
-        for (int x = minx; x <= maxx; ++x) {
-            int w0 = Edge(x2, y2, x3, y3, x, y);
-            int w1 = Edge(x3, y3, x1, y1, x, y);
-            int w2 = Edge(x1, y1, x2, y2, x, y);
-            if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) {
-                Pix(x, y);
-            }
-        }
-    }
-}
-
-// Ve icon XBM 24x24 phong/thu thanh size x size (nearest neighbour)
-static void Icon(const uint8_t* src, int x, int y, int size) {
-    for (int dy = 0; dy < size; ++dy) {
-        int sy = dy * 24 / size;
-        for (int dx = 0; dx < size; ++dx) {
-            int sx = dx * 24 / size;
-            if (src[sy * 3 + sx / 8] & (1u << (sx & 7))) {
-                Pix(x + dx, y + dy);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------- font 5x7 (cot, bit0 = tren)
-struct Glyph {
-    char c;
-    uint8_t col[5];
-};
-
-static const Glyph kFont[] = {
-    {'0', {0x3E, 0x51, 0x49, 0x45, 0x3E}}, {'1', {0x00, 0x42, 0x7F, 0x40, 0x00}},
-    {'2', {0x42, 0x61, 0x51, 0x49, 0x46}}, {'3', {0x21, 0x41, 0x45, 0x4B, 0x31}},
-    {'4', {0x18, 0x14, 0x12, 0x7F, 0x10}}, {'5', {0x27, 0x45, 0x45, 0x45, 0x39}},
-    {'6', {0x3C, 0x4A, 0x49, 0x49, 0x30}}, {'7', {0x01, 0x71, 0x09, 0x05, 0x03}},
-    {'8', {0x36, 0x49, 0x49, 0x49, 0x36}}, {'9', {0x06, 0x49, 0x49, 0x29, 0x1E}},
-    {'.', {0x00, 0x60, 0x60, 0x00, 0x00}}, {'-', {0x08, 0x08, 0x08, 0x08, 0x08}},
-    {'A', {0x7E, 0x11, 0x11, 0x11, 0x7E}}, {'B', {0x7F, 0x49, 0x49, 0x49, 0x36}},
-    {'C', {0x3E, 0x41, 0x41, 0x41, 0x22}}, {'D', {0x7F, 0x41, 0x41, 0x22, 0x1C}},
-    {'E', {0x7F, 0x49, 0x49, 0x49, 0x41}}, {'H', {0x7F, 0x08, 0x08, 0x08, 0x7F}},
-    {'I', {0x00, 0x41, 0x7F, 0x41, 0x00}}, {'L', {0x7F, 0x40, 0x40, 0x40, 0x40}},
-    {'M', {0x7F, 0x02, 0x0C, 0x02, 0x7F}}, {'N', {0x7F, 0x04, 0x08, 0x10, 0x7F}},
-    {'O', {0x3E, 0x41, 0x41, 0x41, 0x3E}}, {'T', {0x01, 0x01, 0x7F, 0x01, 0x01}},
-    {'U', {0x3F, 0x40, 0x40, 0x40, 0x3F}}, {'W', {0x3F, 0x40, 0x38, 0x40, 0x3F}},
-    {'Z', {0x61, 0x51, 0x49, 0x45, 0x43}}, {'m', {0x7C, 0x04, 0x78, 0x04, 0x78}},
-    {'k', {0x7F, 0x10, 0x28, 0x44, 0x00}},
-};
-
-static const Glyph* FindGlyph(char c) {
-    for (const auto& g : kFont) {
-        if (g.c == c) {
-            return &g;
-        }
-    }
-    return nullptr;
-}
-
-static int TextWidth(const char* s, int scale) {
-    int n = static_cast<int>(strlen(s));
-    return n > 0 ? n * 6 * scale - scale : 0;
-}
-
-static void Text(int x, int y, const char* s, int scale, bool bold = false) {
-    for (; *s; ++s, x += 6 * scale) {
-        const Glyph* g = FindGlyph(*s);
-        if (g == nullptr) {
-            continue;
-        }
-        for (int c = 0; c < 5; ++c) {
-            for (int r = 0; r < 7; ++r) {
-                if (g->col[c] & (1u << r)) {
-                    Box(x + c * scale, y + r * scale, scale + (bold ? 1 : 0), scale);
-                }
-            }
-        }
-    }
-}
-
-static void TextC(int cx, int y, const char* s, int scale, bool bold = false) {
-    Text(cx - TextWidth(s, scale) / 2, y, s, scale, bold);
-}
-
-static void Flush() {
-    if (g_eri_oled_panel == nullptr) {
-        return;
-    }
-    if (memcmp(g_fb, g_sent, sizeof(g_fb)) == 0) {
-        return;  // khong doi: khong tot bang thong I2C
-    }
-    memcpy(g_sent, g_fb, sizeof(g_fb));
-    esp_lcd_panel_draw_bitmap(g_eri_oled_panel, 0, 0, kW, kH, g_fb);
-}
 
 // ================================================================ trang thai HUD
 
-struct Hud {
-    int nav = 0, spd = 0, lim = 0, over = 0, trn = 0, dst = -1, exitN = 0;
-    int avg = 0, avgL = 0, alr = 0, alrD = -1, alrV = 0;
-};
+using Hud = EriUi::HudData;
 
 static Hud g_hud;
 static uint32_t g_last_rx = 0;  // ms; 0 = chua co du lieu
@@ -577,191 +410,6 @@ static void HandleLine(const char* s) {
     cJSON_Delete(doc);
 }
 
-// ================================================================ ve man hinh
-
-struct AlertIcon {
-    const uint8_t* bmp;  // nullptr neu khong co icon
-    int maxM;            // khoang cach toi da (met) de bat dau hien
-    bool speedNum;       // true: ve bien toc do co so (alrV)
-};
-
-static AlertIcon AlertIconFor(int a) {
-    switch (a) {
-        case 1: return {ICON_POLICE, 500, false};
-        case 2: case 40: case 41: case 42: case 43: case 44: case 45: case 46:
-            return {ICON_CAM, 500, false};
-        case 3: return {ICON_LIGHT, 500, false};
-        case 4: case 13: case 14: case 15: case 17: case 48:
-            return {ICON_HAZARD, 500, false};
-        case 5: return {ICON_CRASH, 500, false};
-        case 6: return {ICON_JAM, 500, false};
-        case 7: return {ICON_CLOSED, 500, false};
-        case 9: return {ICON_NOPASS, 500, false};
-        case 11: return {ICON_RAIL, 500, false};
-        case 12: return {ICON_TOLL, 500, false};
-        case 20: case 21: return {ICON_REST, 500, false};
-        case 8: return {nullptr, 200, true};  // doi gioi han toc do (kem alrV)
-        case 23: return {ICON_KDC_START, 200, false};
-        case 24: return {ICON_KDC_END, 200, false};
-        case 28: return {ICON_NOLEFT, 200, false};
-        case 29: return {ICON_NORIGHT, 200, false};
-        case 30: return {ICON_NOUTURN, 200, false};
-        case 57: return {ICON_SCHOOL, 200, false};
-        case 59: return {ICON_CURVE, 200, false};
-        default: return {nullptr, 0, false};
-    }
-}
-
-static void FmtDist(int m, char* out, size_t sz) {
-    if (m < 1000) {
-        snprintf(out, sz, "%dm", m);
-    } else {
-        snprintf(out, sz, "%d.%dkm", m / 1000, (m % 1000) / 100);
-    }
-}
-
-// Hop chu nhat / tam giac, lat guong theo truc doc qua cx khi m = true
-static void Bx(int cx, bool m, int x, int y, int w, int h) {
-    if (m) {
-        x = 2 * cx - x - w + 1;
-    }
-    Box(x, y, w, h);
-}
-
-static void Tr(int cx, bool m, int x1, int y1, int x2, int y2, int x3, int y3) {
-    if (m) {
-        x1 = 2 * cx - x1;
-        x2 = 2 * cx - x2;
-        x3 = 2 * cx - x3;
-    }
-    Tri(x1, y1, x2, y2, x3, y3);
-}
-
-static void DrawTurn(int cx, int cy, int trn, int ex) {
-    bool left = (trn == 2 || trn == 4 || trn == 6 || trn == 13 || trn == 15);
-    bool right = (trn == 3 || trn == 5 || trn == 7 || trn == 14 || trn == 16);
-    if (left || right) {
-        bool m = right;
-        Bx(cx, m, cx + 2, cy - 2, 4, 14);
-        Bx(cx, m, cx - 6, cy - 5, 12, 4);
-        Tr(cx, m, cx - 12, cy - 3, cx - 4, cy - 11, cx - 4, cy + 5);
-    } else if (trn == 1 || trn == 19) {  // di thang
-        Box(cx - 2, cy - 4, 4, 16);
-        Tri(cx, cy - 12, cx - 8, cy - 2, cx + 8, cy - 2);
-    } else if (trn == 8 || trn == 9) {  // quay dau
-        Box(cx + 4, cy - 4, 4, 16);
-        Box(cx - 7, cy - 8, 15, 4);
-        Box(cx - 7, cy - 8, 4, 12);
-        Tri(cx - 5, cy + 12, cx - 13, cy + 3, cx + 3, cy + 3);
-    } else if (trn == 10 || trn == 11 || trn == 12 || trn == 20) {  // vong xoay
-        Ring(cx, cy, 11, 2);
-        if (ex > 0) {
-            char b[16];
-            snprintf(b, sizeof(b), "%d", ex);
-            TextC(cx, cy - 7, b, 2, true);
-        }
-    } else if (trn == 17) {  // den noi: la co ca-ro
-        Box(cx - 7, cy - 11, 2, 23);
-        Frame(cx - 5, cy - 11, 13, 9);
-        for (int r = 0; r < 2; ++r) {
-            for (int c = 0; c < 3; ++c) {
-                if (((r + c) & 1) == 0) {
-                    Box(cx - 4 + c * 4, cy - 10 + r * 4, 4, 4);
-                }
-            }
-        }
-    }
-}
-
-static void DrawSpeedSign(int cx, int cy, int v) {
-    Ring(cx, cy, 17, 3);
-    if (v <= 0) {
-        return;
-    }
-    char b[16];
-    snprintf(b, sizeof(b), "%d", v);
-    if (v >= 100) {
-        TextC(cx, cy - 3, b, 1, true);
-    } else {
-        TextC(cx, cy - 7, b, 2, true);
-    }
-}
-
-static void DrawScreen(bool fresh) {
-    memset(g_fb, 0, sizeof(g_fb));
-    g_color = true;
-
-    if (!fresh) {
-        TextC(64, 14, "WAZE HUD", 2, true);
-        TextC(64, 40, g_connected ? "WAIT DATA..." : "WAIT CONNECT BLE", 1);
-        if (g_demo) {
-            Text(0, 57, "DEMO", 1);
-        }
-        return;
-    }
-
-    char b[32];  // du cho moi gia tri int
-
-    // Gioi han toc do: vong tron lon ben trai. Vuot toc do thi nhap nhay dac/dao mau.
-    bool over = g_hud.over || (g_hud.lim > 0 && g_hud.spd > g_hud.lim);
-    bool inv = over && ((NowMs() / 400) % 2 == 0);
-    const int LX = 28, LY = 25, LR = 25;
-    if (inv) {
-        Disc(LX, LY, LR);
-    } else {
-        Ring(LX, LY, LR, 3);
-    }
-    g_color = !inv;
-    if (g_hud.lim > 0) {
-        snprintf(b, sizeof(b), "%d", g_hud.lim);
-        int sc = strlen(b) >= 3 ? 2 : 3;
-        TextC(LX, LY - (7 * sc) / 2, b, sc, true);
-    } else {
-        TextC(LX, LY - 10, "--", 3, true);
-    }
-    g_color = true;
-
-    // Toc do hien tai o goc tren phai
-    Text(66, 0, g_demo ? "DEMO" : "WAZE", 1);
-    snprintf(b, sizeof(b), "%d", g_hud.spd);
-    Text(126 - TextWidth(b, 2), 3, b, 2, true);
-
-    // Ben phai: canh bao (uu tien) hoac mui ten re
-    AlertIcon ai = {nullptr, 0, false};
-    int adist = -1;
-    if (g_hud.avg) {
-        ai = {ICON_NOPASS, 100000, false};
-        adist = g_hud.avgL;
-    } else if (g_hud.alr > 0 && g_hud.alrD >= 0) {
-        AlertIcon t = AlertIconFor(g_hud.alr);
-        if ((t.bmp || t.speedNum) && g_hud.alrD <= t.maxM) {
-            ai = t;
-            adist = g_hud.alrD;
-        }
-    }
-
-    char d[32];
-    if (ai.bmp || ai.speedNum) {
-        if (ai.speedNum) {
-            DrawSpeedSign(95, 33, g_hud.alrV);
-        } else {
-            Icon(ai.bmp, 80, 17, 32);
-        }
-        FmtDist(adist, d, sizeof(d));
-        TextC(96, 50, d, 2, true);
-    } else if (g_hud.nav) {
-        DrawTurn(78, 33, g_hud.trn, g_hud.exitN);
-        if (g_hud.dst >= 0) {
-            FmtDist(g_hud.dst, d, sizeof(d));
-            TextC(96, 50, d, 2, true);
-        }
-    }
-
-    if (!g_sound_on) {
-        Text(0, 57, "MUTE", 1);
-    }
-}
-
 // ================================================================ am thanh theo trang thai
 
 static void UpdateSounds(bool fresh) {
@@ -836,8 +484,15 @@ static void HudTask(void*) {
 
         bool fresh = g_last_rx != 0 && (NowMs() - g_last_rx < 3000);
         UpdateSounds(fresh);
-        DrawScreen(fresh);
-        Flush();
+        EriUi::HudView view;
+        view.hud = g_hud;
+        view.fresh = fresh;
+        view.connected = g_connected.load();
+        view.demo = g_demo.load();
+        view.sound_on = g_sound_on.load();
+        view.t_ms = NowMs();
+        EriUi::DrawHud(view);
+        EriScreen::Present();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -848,13 +503,7 @@ void Start() {
     LogHeap("hud start");
 
     // Dung LVGL: tu day ta ve thang len OLED bang bo dem rieng
-    lvgl_port_stop();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    if (g_eri_oled_panel == nullptr) {
-        ESP_LOGE(TAG, "Khong co tay cam OLED");
-        return;
-    }
-    memset(g_sent, 0xFF, sizeof(g_sent));  // ep ve khung dau tien
+    EriScreen::Begin();
 
     for (int i = 0; i < 256; ++i) {
         g_sine[i] = static_cast<int16_t>(sinf(2.0f * 3.14159265f * i / 256.0f) * 32767.0f * kBeepVol);

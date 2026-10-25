@@ -1,9 +1,9 @@
 #include "eri_radio.h"
 
 #include "audio_codec.h"  // chi de lay macro XIAOZHI_I2S_PORT
-#include "board.h"
+#include "eri_screen.h"
+#include "eri_ui.h"
 #include "config.h"
-#include "display.h"
 #include "eri_mp3.h"
 #include "eri_stations.h"
 #include "settings.h"
@@ -99,13 +99,32 @@ static void LogHeap(const char* stage) {
 
 // ---------------------------------------------------------------- hien thi
 
-static Display* Disp() { return Board::GetInstance().GetDisplay(); }
+static std::atomic<int> g_phase{EriUi::kRadioConnecting};
+static std::atomic<int> g_level{0};  // 0..100, muc am luong dang phat
+static char g_msg[48] = "";
 
-static void ShowLine(const std::string& line) {
-    char status[32];
-    snprintf(status, sizeof(status), "Radio %d/%d", g_station.load() + 1, kStationCount);
-    Disp()->SetStatus(status);
-    Disp()->SetChatMessage("system", line.c_str());
+// Cap nhat trang thai hien thi (UiTask ve len man hinh)
+static void UiState(int phase, const char* msg) {
+    snprintf(g_msg, sizeof(g_msg), "%s", msg);
+    g_phase = phase;
+}
+
+static void UiTask(void*) {
+    while (true) {
+        EriUi::RadioView v;
+        int idx = std::clamp(g_station.load(), 0, kStationCount - 1);
+        v.name = kStations[idx].name;
+        v.msg = g_msg;
+        v.index = idx;
+        v.count = kStationCount;
+        v.volume = g_volume.load();
+        v.phase = g_phase.load();
+        v.level = g_level.load();
+        v.t_ms = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        EriUi::DrawRadio(v);
+        EriScreen::Present();
+        vTaskDelay(pdMS_TO_TICKS(80));
+    }
 }
 
 // ---------------------------------------------------------------- I2S
@@ -160,7 +179,7 @@ static void WriteSilence() {
 
 static bool EnsureWifi() {
     if (SsidManager::GetInstance().GetSsidList().empty()) {
-        ShowLine("Chua co WiFi. Vao Chat AI de cai WiFi");
+        UiState(EriUi::kRadioError, "Chua co WiFi - vao Chat AI de cai");
         return false;
     }
 
@@ -174,14 +193,14 @@ static bool EnsureWifi() {
     });
     wifi.StartStation();
 
-    ShowLine("Dang ket noi WiFi...");
+    UiState(EriUi::kRadioConnecting, "Dang ket noi WiFi...");
     while (!wifi.IsConnected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
     if (ps_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to disable Wi-Fi power save: %s", esp_err_to_name(ps_err));
-        ShowLine("Khong tat duoc WiFi sleep");
+        UiState(EriUi::kRadioConnecting, "Khong tat duoc WiFi sleep");
     } else {
         ESP_LOGI(TAG, "Wi-Fi power save disabled for radio playback");
     }
@@ -481,7 +500,7 @@ static void StreamOnce(int idx, uint32_t gen) {
     if (hdr == nullptr || buf == nullptr) {
         free(hdr);
         free(buf);
-        ShowLine("Het bo nho");
+        UiState(EriUi::kRadioError, "Het bo nho");
         vTaskDelay(pdMS_TO_TICKS(3000));
         return;
     }
@@ -551,7 +570,7 @@ static void StreamOnce(int idx, uint32_t gen) {
         }
         ESP_LOGW(TAG, "Open stream failed: %s", err.c_str());
         if (g_gen.load() == gen) {
-            ShowLine(err);
+            UiState(EriUi::kRadioError, err.c_str());
             SleepInterruptible(3000, gen);
         }
         free(hdr);
@@ -573,7 +592,7 @@ static void StreamOnce(int idx, uint32_t gen) {
     Feeder f{gen, metaint, metaint, 0};
     bool ok = Feed(f, reinterpret_cast<uint8_t*>(hdr) + body_off, static_cast<int>(total - body_off));
     if (ok) {
-        ShowLine(kStations[idx].name);
+        UiState(EriUi::kRadioBuffering, "");
     }
     int read_timeouts = 0;
     while (ok && g_gen.load() == gen) {
@@ -618,11 +637,11 @@ static void NetTask(void*) {
             gen = now_gen;
         }
         int idx = g_station.load();
-        ShowLine(std::string(kStations[idx].name) + " ...");
+        UiState(EriUi::kRadioConnecting, "");
         StreamOnce(idx, gen);
         if (g_gen.load() == gen) {
             // mat ket noi: thu lai sau 2 giay
-            ShowLine("Mat ket noi, thu lai...");
+            UiState(EriUi::kRadioError, "Mat ket noi, thu lai...");
             SleepInterruptible(2000, gen);
         }
     }
@@ -641,10 +660,17 @@ static void OutputPcm(Mp3Decoder& dec, const int16_t* pcm, int bytes, int16_t* s
     }
     int32_t vol = g_volume.load();
     int32_t gain = vol * vol;  // 0..10000, duong cong binh phuong cho de chinh
+    int32_t sum_abs = 0;
     for (int i = 0; i < frames; ++i) {
         int32_t s = (ch == 2) ? (pcm[2 * i] + pcm[2 * i + 1]) / 2 : pcm[i];
+        sum_abs += s < 0 ? -s : s;  // muc nhac goc, khong phu thuoc am luong
         s = s * gain / 10000;
         st[2 * i] = st[2 * i + 1] = static_cast<int16_t>(s);
+    }
+    if (frames > 0) {
+        int raw = std::min(100, static_cast<int>(sum_abs / frames) * 100 / 4500);
+        int old = g_level.load();
+        g_level = std::max(raw, old * 85 / 100);  // len nhanh, xuong tu tu
     }
     size_t written = 0;
     i2s_channel_write(g_tx, st, frames * 4, &written, portMAX_DELAY);
@@ -657,7 +683,7 @@ static void PlayTask(void*) {
     int16_t* st = static_cast<int16_t*>(malloc(kPcmBytes));
     if (in == nullptr || pcm == nullptr || st == nullptr || !dec.Open()) {
         ESP_LOGE(TAG, "Play task init failed");
-        ShowLine("Loi bo giai ma MP3");
+        UiState(EriUi::kRadioError, "Loi bo giai ma MP3");
         vTaskDelete(nullptr);
         return;
     }
@@ -693,6 +719,9 @@ static void PlayTask(void*) {
             if (xStreamBufferBytesAvailable(g_stream) >= kPrebufferBytes ||
                 (xTaskGetTickCount() - prebuffer_start) > pdMS_TO_TICKS(6000)) {
                 prebuffering = false;
+                if (g_phase.load() == EriUi::kRadioBuffering) {
+                    UiState(EriUi::kRadioPlaying, "");
+                }
             } else {
                 WriteSilence();
                 continue;
@@ -737,6 +766,7 @@ static void PlayTask(void*) {
 
 void Start() {
     LogHeap("radio start");
+    EriScreen::Begin();  // dung LVGL, tu day ve bang EriGfx
     {
         Settings settings("eri", false);
         int s = settings.GetInt("rstation", 0);
@@ -744,8 +774,11 @@ void Start() {
         g_volume = std::clamp(static_cast<int>(settings.GetInt("rvol", 60)), 0, 100);
     }
 
+    UiState(EriUi::kRadioConnecting, "Khoi dong...");
+    xTaskCreate(UiTask, "eri_ui", 4096, nullptr, 3, nullptr);
+
     if (!InitI2s()) {
-        ShowLine("Loi I2S");
+        UiState(EriUi::kRadioError, "Loi I2S");
         return;
     }
     g_stream = xStreamBufferCreate(kStreamBufBytes, 1);
@@ -753,12 +786,11 @@ void Start() {
         g_stream = xStreamBufferCreate(kStreamBufBytes / 2, 1);
     }
     if (g_stream == nullptr) {
-        ShowLine("Het bo nho");
+        UiState(EriUi::kRadioError, "Het bo nho");
         return;
     }
     LogHeap("stream buffer allocated");
 
-    ShowLine("Khoi dong radio...");
     xTaskCreate(PlayTask, "eri_play", 8192, nullptr, 6, nullptr);
     xTaskCreate(NetTask, "eri_net", 6144, nullptr, 5, nullptr);
 }
@@ -771,7 +803,8 @@ void NextStation() {
     g_station = idx;
     g_gen++;
     ScheduleSave();
-    ShowLine(std::string(kStations[idx].name) + " ...");
+    g_level = 0;
+    UiState(EriUi::kRadioConnecting, "");
 }
 
 void VolumeStep(int delta) {
@@ -782,7 +815,6 @@ void VolumeStep(int delta) {
     v = std::max(v, 0);
     g_volume = v;
     ScheduleSave();
-    Disp()->ShowNotification("Am luong " + std::to_string(v), 1500);
 }
 
 }  // namespace EriRadio

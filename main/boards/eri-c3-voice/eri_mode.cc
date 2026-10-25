@@ -1,5 +1,8 @@
 #include "eri_mode.h"
+#include "eri_gfx.h"
 #include "eri_hud.h"
+#include "eri_screen.h"
+#include "eri_ui.h"
 #include "eri_radio.h"
 
 #include "board.h"
@@ -30,27 +33,17 @@ static std::atomic<uint32_t> g_menu_start_ms{0};  // bo qua nut bam luc moi vao 
 static uint32_t NowMs() { return static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS); }
 static bool MenuSettling() { return NowMs() - g_menu_start_ms.load() < 800; }
 
-static void ShowMenu(int sel, int secs_left) {
-    auto display = Board::GetInstance().GetDisplay();
-    static const char* const kTitles[kModeCount] = {
-        "[AI] radio waze",
-        "ai [RADIO] waze",
-        "ai radio [WAZE]",
-    };
-    display->SetStatus(kTitles[sel % kModeCount]);
-    char msg[64];
-    if (secs_left >= 0) {
-        snprintf(msg, sizeof(msg), "GPIO10 doi - GPIO4 chon (%d)", secs_left);
-    } else {
-        snprintf(msg, sizeof(msg), "GPIO10 doi - GPIO4 chon");
-    }
-    display->SetChatMessage("system", msg);
-}
-
 bool Run() {
-    auto& board = Board::GetInstance();
-    auto display = board.GetDisplay();
-    display->SetupUI();  // OledDisplay bo qua neu goi lai lan nua trong Application
+    {
+        Settings settings("eri", true);
+        if (settings.GetInt("skip", 0) != 0) {
+            settings.SetInt("skip", 0);  // vua khoi dong lai de vao Chat AI: bo qua menu
+            g_mode = static_cast<int>(Mode::kChat);
+            return false;
+        }
+    }
+
+    Board::GetInstance();  // tao board (man hinh, nut bam) truoc khi ve menu
 
     int last = 0;
     bool stay = false;  // nguoi dung chu dong ve menu: cho chon, khong tu vao lai
@@ -69,30 +62,34 @@ bool Run() {
     g_mode = static_cast<int>(Mode::kMenu);
     ESP_LOGI(TAG, "Menu started, last mode=%d", last);
 
-    int secs = kMenuSeconds;
-    int elapsed_ms = 0;
-    ShowMenu(g_sel, stay ? -1 : secs);
+    EriScreen::Begin();  // dung LVGL, menu ve bang EriGfx
 
+    const int total_ms = kMenuSeconds * 1000;
+    uint32_t t0 = NowMs();
+    bool counting = !stay;
     while (!g_confirm) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        if (g_touched || stay) {
-            continue;  // da bam nut: cho xac nhan, khong tu vao nua
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (g_touched) {
+            counting = false;  // da bam nut: cho xac nhan, khong tu vao nua
         }
-        elapsed_ms += 100;
-        if (elapsed_ms >= 1000) {
-            elapsed_ms = 0;
-            secs--;
-            if (secs <= 0) {
+        int left = 0;
+        if (counting) {
+            left = total_ms - static_cast<int>(NowMs() - t0);
+            if (left <= 0) {
                 break;  // het gio: dung che do lan truoc
             }
-            ShowMenu(g_sel, secs);
         }
+        EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0);
+        EriScreen::Present();
     }
 
     int sel = g_sel;
     {
         Settings settings("eri", true);
         settings.SetInt("mode", sel);
+        if (sel == 0) {
+            settings.SetInt("skip", 1);
+        }
     }
     ESP_LOGI(TAG, "Selected mode: %s", sel == 2 ? "waze" : (sel == 1 ? "radio" : "chat"));
 
@@ -106,7 +103,14 @@ bool Run() {
         EriHud::Start();
         return true;
     }
-    g_mode = static_cast<int>(Mode::kChat);
+
+    // Chat AI can LVGL nguyen ven: khoi dong lai de LVGL chay tu dau (lan sau bo qua menu)
+    EriGfx::Clear();
+    EriGfx::SetColor(true);
+    EriGfx::TextC(EriGfx::kFontM, 64, 36, "Chat AI...");
+    EriScreen::Present();
+    vTaskDelay(pdMS_TO_TICKS(300));
+    esp_restart();
     return false;
 }
 
@@ -151,7 +155,6 @@ bool HandleVolumeClick() {
             }
             g_touched = true;
             g_sel = (g_sel.load() + 1) % kModeCount;
-            ShowMenu(g_sel, -1);
             return true;
         case Mode::kRadio:
             EriRadio::VolumeStep(+10);
@@ -181,10 +184,17 @@ bool HandleVolumeLongPress() {
 
 void RestartToMenu() {
     ESP_LOGI(TAG, "Restarting to show mode menu");
-    Board::GetInstance().GetDisplay()->ShowNotification("Ve menu...", 1500);
     {
         Settings settings("eri", true);
         settings.SetInt("stay", 1);
+    }
+    if (Current() == Mode::kChat) {
+        Board::GetInstance().GetDisplay()->ShowNotification("Ve menu...", 1500);
+    } else {
+        EriGfx::Clear();
+        EriGfx::SetColor(true);
+        EriGfx::TextC(EriGfx::kFontM, 64, 36, "Ve menu...");
+        EriScreen::Present();
     }
     vTaskDelay(pdMS_TO_TICKS(600));
     esp_restart();
