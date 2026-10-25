@@ -1,6 +1,7 @@
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
 #include "display/oled_display.h"
+#include "eri_chat_display.h"
 #include "application.h"
 #include "button.h"
 #include "config.h"
@@ -61,8 +62,8 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
         g_eri_oled_panel = panel;
 
-        display_ = new OledDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                                   DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = new EriChatDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                      DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeButtons() {

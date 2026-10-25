@@ -5,6 +5,7 @@
 
 #include <algorithm>
 
+#include "eri_ascii_fold.h"
 #include "eri_gfx.h"
 #include "eri_hud_icons.h"
 
@@ -307,6 +308,368 @@ void DrawHud(const HudView& v) {
         if (h.dst >= 0) {
             FmtDist(h.dst, d, sizeof(d));
             TextC(kFontL, CX, 62, d);
+        }
+    }
+}
+
+// ================================================================ Chat AI
+
+void FoldAscii(const char* s, char* out, size_t cap) {
+    size_t n = 0;
+    auto put = [&](char ch) {
+        if (n + 1 < cap) {
+            out[n++] = ch;
+        }
+    };
+    while (*s) {
+        unsigned char c = static_cast<unsigned char>(*s);
+        uint32_t cp = 0;
+        int len = 1;
+        if (c < 0x80) {
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F;
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F;
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07;
+            len = 4;
+        }
+        for (int i = 1; i < len; ++i) {
+            unsigned char cc = static_cast<unsigned char>(s[i]);
+            if ((cc & 0xC0) != 0x80) {
+                len = i;
+                break;
+            }
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        s += len;
+        if (cp < 0x80) {
+            put(static_cast<char>(cp == '\n' || cp == '\r' || cp == '\t' ? ' ' : cp));
+        } else if (cp == 0x2026) {
+            put('.');
+            put('.');
+            put('.');
+        } else {
+            int lo = 0, hi = kFoldCount - 1;
+            while (lo <= hi) {
+                int mid = (lo + hi) / 2;
+                if (kFoldCp[mid] == cp) {
+                    put(kFoldCh[mid]);
+                    break;
+                }
+                if (kFoldCp[mid] < cp) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+        }
+    }
+    if (cap > 0) {
+        out[n] = 0;
+    }
+}
+
+enum Face { kFNeutral, kFHappy, kFLaugh, kFSad, kFCry, kFAngry, kFSurprised, kFThink, kFSleepy,
+            kFWink, kFCool, kFLove };
+
+static int FaceFor(const char* e) {
+    struct M { const char* n; int f; };
+    static const M kMap[] = {
+        {"neutral", kFNeutral}, {"relaxed", kFNeutral}, {"happy", kFHappy}, {"delicious", kFHappy},
+        {"kissy", kFHappy}, {"confident", kFHappy}, {"laughing", kFLaugh}, {"funny", kFLaugh},
+        {"sad", kFSad}, {"crying", kFCry}, {"angry", kFAngry}, {"surprised", kFSurprised},
+        {"shocked", kFSurprised}, {"thinking", kFThink}, {"confused", kFThink},
+        {"embarrassed", kFThink}, {"sleepy", kFSleepy}, {"winking", kFWink}, {"silly", kFWink},
+        {"cool", kFCool}, {"loving", kFLove},
+    };
+    for (const auto& m : kMap) {
+        if (strcmp(e, m.n) == 0) {
+            return m.f;
+        }
+    }
+    return kFNeutral;
+}
+
+// Net day 2px
+static void Line2(int x0, int y0, int x1, int y1) {
+    Line(x0, y0, x1, y1);
+    Line(x0, y0 + 1, x1, y1 + 1);
+}
+
+static void Heart(int cx, int cy) {
+    Disc(cx - 2, cy - 1, 2);
+    Disc(cx + 2, cy - 1, 2);
+    Tri(cx - 4, cy, cx + 4, cy, cx, cy + 5);
+}
+
+static void Smile(int cx, int cy, bool open) {
+    Line2(cx - 7, cy, cx - 4, cy + 3);
+    Line2(cx - 4, cy + 3, cx + 4, cy + 3);
+    Line2(cx + 4, cy + 3, cx + 7, cy);
+    if (open) {
+        RoundBox(cx - 5, cy + 1, 11, 6, 3);
+    }
+}
+
+static void DrawFace(int emo, int cx, int cy, uint32_t t, bool speaking) {
+    RoundFrame(cx - 17, cy - 15, 34, 30, 10);
+    const int ex = 8, ey = cy - 4;  // lech mat
+    bool blink = (t % 3600) < 130 && emo != kFSleepy;
+
+    // Mat
+    switch (emo) {
+        case kFHappy:
+        case kFLaugh:
+        case kFLove:
+            if (emo == kFLove) {
+                Heart(cx - ex, ey);
+                Heart(cx + ex, ey);
+            } else {
+                Line2(cx - ex - 3, ey + 2, cx - ex, ey - 2);
+                Line2(cx - ex, ey - 2, cx - ex + 3, ey + 2);
+                Line2(cx + ex - 3, ey + 2, cx + ex, ey - 2);
+                Line2(cx + ex, ey - 2, cx + ex + 3, ey + 2);
+            }
+            break;
+        case kFSurprised:
+            Ring(cx - ex, ey, 4, 2);
+            Ring(cx + ex, ey, 4, 2);
+            break;
+        case kFSleepy:
+            Box(cx - ex - 3, ey + 1, 7, 2);
+            Box(cx + ex - 3, ey + 1, 7, 2);
+            break;
+        case kFCool:
+            Box(cx - 13, ey - 3, 11, 6);
+            Box(cx + 2, ey - 3, 11, 6);
+            Box(cx - 2, ey - 2, 4, 2);
+            break;
+        case kFWink:
+            RoundBox(cx - ex - 2, ey - 4, 5, 8, 2);
+            Line2(cx + ex - 3, ey - 2, cx + ex + 3, ey);
+            Line2(cx + ex + 3, ey, cx + ex - 3, ey + 2);
+            break;
+        case kFAngry:
+            RoundBox(cx - ex - 2, ey - 2, 5, 6, 2);
+            RoundBox(cx + ex - 2, ey - 2, 5, 6, 2);
+            Line2(cx - ex - 4, ey - 7, cx - ex + 3, ey - 4);
+            Line2(cx + ex + 4, ey - 7, cx + ex - 3, ey - 4);
+            break;
+        case kFThink:
+            RoundBox(cx - ex - 2, ey - 4, 5, 8, 2);
+            RoundBox(cx + ex - 2, ey - 4, 5, 8, 2);
+            Line(cx + ex - 4, ey - 8, cx + ex + 4, ey - 9);
+            break;
+        default:  // neutral, sad, cry
+            if (blink) {
+                Box(cx - ex - 2, ey, 5, 2);
+                Box(cx + ex - 2, ey, 5, 2);
+            } else {
+                RoundBox(cx - ex - 2, ey - 4, 5, 8, 2);
+                RoundBox(cx + ex - 2, ey - 4, 5, 8, 2);
+            }
+            break;
+    }
+    if (emo == kFCry) {
+        int drop = static_cast<int>((t / 120) % 8);
+        Box(cx - ex, ey + 5 + drop, 2, 2);
+        Box(cx + ex, ey + 5 + (drop + 3) % 8, 2, 2);
+    }
+
+    // Mieng
+    const int my = cy + 6;
+    if (speaking) {
+        int open = static_cast<int>((t / 110) % 4);
+        static const int hs[4] = {2, 5, 7, 4};
+        RoundBox(cx - 5, my - hs[open] / 2, 11, hs[open], 2);
+        return;
+    }
+    switch (emo) {
+        case kFHappy:
+        case kFWink:
+        case kFCool:
+        case kFLove:
+            Smile(cx, my - 2, false);
+            break;
+        case kFLaugh:
+            Smile(cx, my - 3, true);
+            break;
+        case kFSad:
+        case kFCry:
+            Line2(cx - 6, my + 3, cx - 3, my);
+            Line2(cx - 3, my, cx + 3, my);
+            Line2(cx + 3, my, cx + 6, my + 3);
+            break;
+        case kFAngry:
+            Box(cx - 5, my, 11, 2);
+            break;
+        case kFSurprised:
+            Ring(cx, my + 1, 3, 2);
+            break;
+        case kFThink:
+            Line2(cx - 3, my + 1, cx + 6, my - 1);
+            break;
+        case kFSleepy:
+            Box(cx - 3, my, 7, 2);
+            Text(kFontS, cx + 14, cy - 10 - static_cast<int>((t / 300) % 3), "z");
+            break;
+        default:
+            Box(cx - 5, my, 11, 2);
+            break;
+    }
+}
+
+static void DrawWaves(int x0, int x1, int cy, int mode, uint32_t t) {
+    const int bw = 3, step = 5;
+    int n = (x1 - x0) / step;
+    for (int i = 0; i < n; ++i) {
+        int h = 2;
+        if (mode == kChatListening || mode == kChatSpeaking) {
+            uint32_t k = (t / 70) * 7919u + static_cast<uint32_t>(i) * 104729u;
+            k ^= k >> 7;
+            k *= 2654435761u;
+            k ^= k >> 15;
+            int r = static_cast<int>(k % 100);
+            int env = 40 + (i < n / 2 ? i : n - 1 - i) * 60 / (n / 2);  // cao o giua
+            int amp = mode == kChatSpeaking ? 26 : 16;
+            h = 2 + amp * r / 100 * env / 100;
+        } else if (mode == kChatBusy) {
+            h = ((t / 110 + i) % n < 3) ? 7 : 2;  // song chay cho
+        }
+        h &= ~1;  // doi xung quanh duong giua
+        if (h < 2) {
+            h = 2;
+        }
+        Box(x0 + i * step, cy - h / 2, bw, h);
+    }
+}
+
+static int WrapLines(const char* s, int maxw, int* starts, int* lens, int max_lines) {
+    int n = 0, i = 0, len = static_cast<int>(strlen(s));
+    while (i < len && n < max_lines) {
+        while (i < len && s[i] == ' ') {
+            ++i;
+        }
+        if (i >= len) {
+            break;
+        }
+        int start = i, last_space = -1, w = 0, j = i;
+        char one[2] = {0, 0};
+        while (j < len) {
+            one[0] = s[j];
+            int cw = TextWidth(kFontS, one);
+            if (w + cw > maxw) {
+                break;
+            }
+            w += cw;
+            if (s[j] == ' ') {
+                last_space = j;
+            }
+            ++j;
+        }
+        int end = j;
+        if (j < len && last_space > start) {
+            end = last_space;  // ngat o khoang trang
+        }
+        starts[n] = start;
+        lens[n] = end - start;
+        ++n;
+        i = end;
+    }
+    return n;
+}
+
+void DrawChat(const ChatView& v) {
+    Clear();
+    SetColor(true);
+
+    // ---- Thanh tren: WiFi | trang thai
+    for (int b = 0; b < 4; ++b) {
+        int h = 2 + b * 2;
+        if (b < v.wifi) {
+            Box(1 + b * 3, 9 - h + 1, 2, h);
+        } else {
+            Pix(1 + b * 3, 9);
+            Pix(2 + b * 3, 9);
+        }
+    }
+    if (v.wifi == 0) {
+        Line(14, 2, 18, 8);
+        Line(18, 2, 14, 8);
+    }
+    const char* top = (v.notif != nullptr && v.notif[0]) ? v.notif : v.status;
+    if (top != nullptr && top[0]) {
+        int w = TextWidth(kFontS, top);
+        if (w <= 100) {
+            TextC(kFontS, 66, 9, top);
+        } else {
+            int cycle = w + 24;
+            int off = static_cast<int>((v.t_ms / 40) % static_cast<uint32_t>(cycle));
+            // chi ve trong vung x 22..127
+            Text(kFontS, 108 - off, 9, top);
+            Text(kFontS, 108 - off + cycle, 9, top);
+            SetColor(false);
+            Box(0, 0, 22, 12);  // che phan tran sang vung WiFi
+            SetColor(true);
+            // ve lai WiFi sau khi che
+            for (int b = 0; b < 4; ++b) {
+                int h = 2 + b * 2;
+                if (b < v.wifi) {
+                    Box(1 + b * 3, 9 - h + 1, 2, h);
+                } else {
+                    Pix(1 + b * 3, 9);
+                    Pix(2 + b * 3, 9);
+                }
+            }
+        }
+    }
+    Box(0, 12, kW, 1);
+
+    // ---- Giua: bieu cam + song am
+    int emo = FaceFor(v.emotion != nullptr ? v.emotion : "");
+    DrawFace(emo, 23, 29, v.t_ms, v.mode == kChatSpeaking);
+    DrawWaves(48, 126, 29, v.mode, v.t_ms);
+
+    // ---- Duoi: chu AI noi (2 dong, tu lat trang)
+    Box(0, 45, kW, 1);
+    const char* msg = v.msg != nullptr ? v.msg : "";
+    if (msg[0] == 0) {
+        TextC(kFontS, 64, 58, v.mode == kChatIdle ? "Noi 'Hi,ESP' hoac bam nut 4" : "...");
+        return;
+    }
+    int starts[24], lens[24];
+    int n = WrapLines(msg, 124, starts, lens, 24);
+    int pages = (n + 1) / 2;
+    int page = pages > 1 ? static_cast<int>((v.msg_age_ms / 2600) % static_cast<uint32_t>(pages)) : 0;
+    for (int r = 0; r < 2; ++r) {
+        int li = page * 2 + r;
+        if (li >= n) {
+            break;
+        }
+        char buf[64];
+        int l = std::min(lens[li], 63);
+        memcpy(buf, msg + starts[li], l);
+        buf[l] = 0;
+        int base = 54 + r * 8;
+        if (r == 0 && page == 0 && v.msg_is_user) {
+            Text(kFontS, 1, base, ">");
+            Text(kFontS, 8, base, buf);
+        } else {
+            Text(kFontS, 2, base, buf);
+        }
+    }
+    if (pages > 1) {  // cham bao so trang
+        for (int p = 0; p < pages && p < 8; ++p) {
+            Box(126, 47 + p * 3, 2, 2);
+            if (p != page) {
+                SetColor(false);
+                Pix(126, 47 + p * 3);
+                SetColor(true);
+            }
         }
     }
 }

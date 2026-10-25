@@ -1,4 +1,6 @@
 #pragma once
+#include <cstddef>
+#include <cstdint>
 // Cac man hinh (menu, radio, WAZE HUD) ve bang eri_gfx. Khong phu thuoc ESP-IDF.
 
 #include <stdint.h>
@@ -37,5 +39,23 @@ struct HudView {
     uint32_t t_ms = 0;
 };
 void DrawHud(const HudView& v);
+
+// ---- Chat AI
+enum ChatMode { kChatIdle = 0, kChatListening, kChatSpeaking, kChatBusy };
+struct ChatView {
+    const char* status = "";   // trang thai (giua thanh tren)
+    const char* notif = "";    // thong bao tam (neu co thi thay trang thai)
+    const char* emotion = "";  // ten bieu cam cua Xiaozhi: "happy", "sad", ...
+    const char* msg = "";      // chu AI noi (da doi sang ASCII)
+    bool msg_is_user = false;
+    int wifi = 0;              // 0 = mat ket noi, 1..4 = vach song
+    int mode = kChatIdle;
+    uint32_t t_ms = 0;
+    uint32_t msg_age_ms = 0;   // thoi gian ke tu khi chu thay doi (de lat trang)
+};
+void DrawChat(const ChatView& v);
+
+// Doi chuoi UTF-8 (tieng Viet co dau) sang ASCII khong dau. Ky tu khac (CJK...) bi bo.
+void FoldAscii(const char* utf8, char* out, size_t out_size);
 
 }  // namespace EriUi
