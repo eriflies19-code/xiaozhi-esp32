@@ -13,7 +13,10 @@
 #include <wifi_manager.h>
 
 #include <driver/i2s_std.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_system.h>
+#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/stream_buffer.h>
 #include <freertos/task.h>
@@ -22,6 +25,7 @@
 #include <esp_crt_bundle.h>
 #include <esp_tls.h>
 
+#include <errno.h>
 #include <string.h>
 #include <strings.h>
 
@@ -38,6 +42,10 @@ static constexpr size_t kStreamBufBytes = 24 * 1024;  // bo dem mang
 static constexpr size_t kPrebufferBytes = 8 * 1024;   // dem truoc khi phat
 static constexpr int kInBufBytes = 3072;              // du chua 1 khung MP3 (toi da ~1441 byte)
 static constexpr int kPcmBytes = 1152 * 2 * 2;        // 1 khung MP3 stereo 16-bit
+static constexpr int kConnReadTimeoutMs = 1000;
+static constexpr int kConnReadTimeoutLimit = 8;
+static constexpr int kConnReadTimedOut = -2;
+static constexpr int kConnCancelled = -3;
 
 static std::atomic<int> g_station{0};
 static std::atomic<int> g_volume{60};
@@ -46,6 +54,15 @@ static std::atomic<uint32_t> g_ack{0};  // task phat da xac nhan `gen` nay
 static StreamBufferHandle_t g_stream = nullptr;
 static i2s_chan_handle_t g_tx = nullptr;
 static int g_rate = 0;
+
+static void LogHeap(const char* stage) {
+    ESP_LOGI(TAG, "Heap [%s]: free=%u min=%u internal=%u largest_internal=%u",
+             stage, static_cast<unsigned>(esp_get_free_heap_size()),
+             static_cast<unsigned>(esp_get_minimum_free_heap_size()),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+             static_cast<unsigned>(
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+}
 
 // ---------------------------------------------------------------- hien thi
 
@@ -128,6 +145,13 @@ static bool EnsureWifi() {
     while (!wifi.IsConnected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
+    esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (ps_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to disable Wi-Fi power save: %s", esp_err_to_name(ps_err));
+        ShowLine("Khong tat duoc WiFi sleep");
+    } else {
+        ESP_LOGI(TAG, "Wi-Fi power save disabled for radio playback");
+    }
     return true;
 }
 
@@ -196,25 +220,40 @@ struct Conn {
     bool Valid() const { return fd >= 0 || tls != nullptr; }
 };
 
-static int ConnRecv(Conn& c, void* buf, size_t len) {
+static int ConnRecv(Conn& c, void* buf, size_t len, uint32_t gen) {
     if (c.tls != nullptr) {
         while (true) {
+            if (g_gen.load() != gen) {
+                return kConnCancelled;
+            }
             int n = esp_tls_conn_read(c.tls, static_cast<char*>(buf), len);
             if (n == ESP_TLS_ERR_SSL_WANT_READ || n == ESP_TLS_ERR_SSL_WANT_WRITE) {
+                vTaskDelay(1);
                 continue;
+            }
+            if (n == ESP_TLS_ERR_SSL_TIMEOUT) {
+                return kConnReadTimedOut;
             }
             return n;
         }
     }
-    return recv(c.fd, buf, len, 0);
+    int n = recv(c.fd, buf, len, 0);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return kConnReadTimedOut;
+    }
+    return n;
 }
 
-static int ConnSend(Conn& c, const void* buf, size_t len) {
+static int ConnSend(Conn& c, const void* buf, size_t len, uint32_t gen) {
     if (c.tls != nullptr) {
         size_t sent = 0;
         while (sent < len) {
+            if (g_gen.load() != gen) {
+                return kConnCancelled;
+            }
             int n = esp_tls_conn_write(c.tls, static_cast<const char*>(buf) + sent, len - sent);
             if (n == ESP_TLS_ERR_SSL_WANT_READ || n == ESP_TLS_ERR_SSL_WANT_WRITE) {
+                vTaskDelay(1);
                 continue;
             }
             if (n < 0) {
@@ -258,10 +297,11 @@ static bool ConnOpen(Conn& c, const Url& u, std::string& err) {
         }
         int fd = -1;
         if (esp_tls_get_conn_sockfd(c.tls, &fd) == ESP_OK && fd >= 0) {
-            struct timeval tv = {8, 0};
+            struct timeval tv = {kConnReadTimeoutMs / 1000, (kConnReadTimeoutMs % 1000) * 1000};
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
             setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         }
+        LogHeap("HTTPS connected");
         return true;
     }
 
@@ -281,7 +321,7 @@ static bool ConnOpen(Conn& c, const Url& u, std::string& err) {
         err = "Loi socket";
         return false;
     }
-    struct timeval tv = {8, 0};
+    struct timeval tv = {kConnReadTimeoutMs / 1000, (kConnReadTimeoutMs % 1000) * 1000};
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     if (connect(s, res->ai_addr, res->ai_addrlen) != 0) {
@@ -298,28 +338,50 @@ static bool ConnOpen(Conn& c, const Url& u, std::string& err) {
 // Mo ket noi va doc phan header. Tra ve true neu thanh cong.
 // hdr duoc ket thuc bang NUL sau header; byte noi dung bat dau tai hdr + body_off.
 static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& body_off,
-                     size_t& total, std::string& err) {
+                     size_t& total, std::string& err, uint32_t gen) {
     if (!ConnOpen(c, u, err)) {
+        return false;
+    }
+    if (g_gen.load() != gen) {
+        ConnClose(c);
         return false;
     }
 
     std::string req = "GET " + u.path + " HTTP/1.0\r\nHost: " + u.host +
                       "\r\nUser-Agent: WinampMPEG/5.0\r\nAccept: */*\r\n"
                       "Icy-MetaData: 0\r\nConnection: close\r\n\r\n";
-    if (ConnSend(c, req.data(), req.size()) < 0) {
+    if (ConnSend(c, req.data(), req.size(), gen) < 0) {
         ConnClose(c);
         err = "Gui yeu cau loi";
         return false;
     }
 
     total = 0;
+    int read_timeouts = 0;
     while (total < hdr_cap - 1) {
-        int n = ConnRecv(c, hdr + total, hdr_cap - 1 - total);
+        if (g_gen.load() != gen) {
+            ConnClose(c);
+            return false;
+        }
+        int n = ConnRecv(c, hdr + total, hdr_cap - 1 - total, gen);
+        if (n == kConnReadTimedOut) {
+            if (++read_timeouts < kConnReadTimeoutLimit) {
+                continue;
+            }
+            ConnClose(c);
+            err = "Khong co phan hoi";
+            return false;
+        }
+        if (n == kConnCancelled) {
+            ConnClose(c);
+            return false;
+        }
         if (n <= 0) {
             ConnClose(c);
             err = "Khong co phan hoi";
             return false;
         }
+        read_timeouts = 0;
         total += n;
         hdr[total] = 0;
         char* end = strstr(hdr, "\r\n\r\n");
@@ -401,7 +463,7 @@ static void StreamOnce(int idx, uint32_t gen) {
             err = "URL sai";
             break;
         }
-        if (!OpenHttp(conn, u, hdr, 2048, body_off, total, err)) {
+        if (!OpenHttp(conn, u, hdr, 2048, body_off, total, err, gen)) {
             break;
         }
         int code = 0;
@@ -480,12 +542,24 @@ static void StreamOnce(int idx, uint32_t gen) {
     if (ok) {
         ShowLine(kStations[idx].name);
     }
-    while (ok) {
-        int n = ConnRecv(conn, buf, 1024);
+    int read_timeouts = 0;
+    while (ok && g_gen.load() == gen) {
+        int n = ConnRecv(conn, buf, 1024, gen);
+        if (n == kConnReadTimedOut) {
+            if (++read_timeouts < kConnReadTimeoutLimit) {
+                continue;
+            }
+            ESP_LOGW(TAG, "Stream stalled for %d seconds", kConnReadTimeoutLimit);
+            break;
+        }
+        if (n == kConnCancelled || g_gen.load() != gen) {
+            break;
+        }
         if (n <= 0) {
             ESP_LOGW(TAG, "Stream ended or stalled (n=%d)", n);
             break;
         }
+        read_timeouts = 0;
         ok = Feed(f, buf, n);
     }
 
@@ -545,13 +619,21 @@ static void PlayTask(void*) {
         vTaskDelete(nullptr);
         return;
     }
+    LogHeap("decoder ready");
 
     int in_len = 0;
     uint32_t my_gen = 0;
     bool prebuffering = true;
     TickType_t prebuffer_start = xTaskGetTickCount();
+    TickType_t heap_log_tick = prebuffer_start;
 
     while (true) {
+        TickType_t now = xTaskGetTickCount();
+        if (now - heap_log_tick >= pdMS_TO_TICKS(30000)) {
+            LogHeap("radio playing");
+            heap_log_tick = now;
+        }
+
         uint32_t gen = g_gen.load();
         if (gen != my_gen) {
             dec.Reset();
@@ -612,6 +694,7 @@ static void PlayTask(void*) {
 // ---------------------------------------------------------------- giao dien
 
 void Start() {
+    LogHeap("radio start");
     {
         Settings settings("eri", false);
         int s = settings.GetInt("rstation", 0);
@@ -631,6 +714,7 @@ void Start() {
         ShowLine("Het bo nho");
         return;
     }
+    LogHeap("stream buffer allocated");
 
     ShowLine("Khoi dong radio...");
     xTaskCreate(PlayTask, "eri_play", 8192, nullptr, 6, nullptr);
