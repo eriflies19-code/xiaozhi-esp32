@@ -14,6 +14,9 @@
 
 #define TAG "EriC3Voice"
 
+// Tay cam man hinh OLED, de che do WAZE HUD ve thang len man hinh (eri_hud.cc)
+esp_lcd_panel_handle_t g_eri_oled_panel = nullptr;
+
 class EriC3Voice : public WifiBoard {
 private:
     i2c_master_bus_handle_t display_i2c_bus_ = nullptr;
@@ -56,6 +59,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
+        g_eri_oled_panel = panel;
 
         display_ = new OledDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                    DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
@@ -83,7 +87,7 @@ private:
             }
             auto codec = GetAudioCodec();
             int volume = codec->output_volume() + 10;
-            if (volume > 100) volume = 100;
+            if (volume > 100) volume = 10;  // vong lai nhu Radio
             codec->SetOutputVolume(volume);
             GetDisplay()->ShowNotification("Volume " + std::to_string(volume));
         });

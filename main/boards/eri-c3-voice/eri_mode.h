@@ -1,13 +1,13 @@
 #pragma once
 
-// Menu chon che do khi bat may: Chat AI (Xiaozhi) hoac Radio.
+// Menu chon che do khi bat may: Chat AI (Xiaozhi), Radio hoac WAZE HUD.
 // Header nay cố ý nhe (khong include board.h) de main.cc co the include an toan.
 
 namespace EriMode {
 
-enum class Mode { kMenu, kChat, kRadio };
+enum class Mode { kMenu, kChat, kRadio, kHud };
 
-// Hien menu (5 giay). Tra ve true neu da chon Radio va radio dang chay
+// Hien menu (5 giay). Tra ve true neu da chon Radio/WAZE HUD va che do do dang chay
 // trong cac task rieng -> app_main nen return, KHONG khoi dong Application.
 // Tra ve false neu chon Chat AI -> tiep tuc khoi dong Xiaozhi nhu binh thuong.
 bool Run();

@@ -16,6 +16,7 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/stream_buffer.h>
@@ -38,14 +39,17 @@
 namespace EriRadio {
 
 static constexpr int kStationCount = sizeof(kStations) / sizeof(kStations[0]);
-static constexpr size_t kStreamBufBytes = 24 * 1024;  // bo dem mang
-static constexpr size_t kPrebufferBytes = 8 * 1024;   // dem truoc khi phat
+static constexpr size_t kStreamBufBytes = 32 * 1024;  // bo dem mang
+static constexpr size_t kPrebufferBytes = 12 * 1024;  // dem truoc khi phat
 static constexpr int kInBufBytes = 3072;              // du chua 1 khung MP3 (toi da ~1441 byte)
 static constexpr int kPcmBytes = 1152 * 2 * 2;        // 1 khung MP3 stereo 16-bit
 static constexpr int kConnReadTimeoutMs = 1000;
 static constexpr int kConnReadTimeoutLimit = 8;
 static constexpr int kConnReadTimedOut = -2;
 static constexpr int kConnCancelled = -3;
+static constexpr int kSettleMs = 350;     // cho nguoi dung ngung bam nut roi moi ket noi
+static constexpr int kSaveDelayMs = 2000; // ghi NVS tre, tranh dung flash luc dang phat
+static constexpr int kRecvBytes = 2048;
 
 static std::atomic<int> g_station{0};
 static std::atomic<int> g_volume{60};
@@ -54,6 +58,35 @@ static std::atomic<uint32_t> g_ack{0};  // task phat da xac nhan `gen` nay
 static StreamBufferHandle_t g_stream = nullptr;
 static i2s_chan_handle_t g_tx = nullptr;
 static int g_rate = 0;
+static esp_timer_handle_t g_save_timer = nullptr;
+
+// Ghi dai/am luong vao NVS sau khi het thao tac (ghi flash lam khung CPU, gay giat am thanh)
+static void SaveSettingsCb(void*) {
+    Settings settings("eri", true);
+    settings.SetInt("rstation", g_station.load());
+    settings.SetInt("rvol", g_volume.load());
+}
+
+static void ScheduleSave() {
+    if (g_save_timer == nullptr) {
+        esp_timer_create_args_t args = {};
+        args.callback = SaveSettingsCb;
+        args.name = "eri_save";
+        if (esp_timer_create(&args, &g_save_timer) != ESP_OK) {
+            g_save_timer = nullptr;
+            return;
+        }
+    }
+    esp_timer_stop(g_save_timer);  // loi neu chua chay: bo qua
+    esp_timer_start_once(g_save_timer, static_cast<uint64_t>(kSaveDelayMs) * 1000);
+}
+
+// Ngu toi da `ms`, thoat som neu doi dai/doi kenh (de bam nut khong phai cho)
+static void SleepInterruptible(int ms, uint32_t gen) {
+    for (int t = 0; t < ms && g_gen.load() == gen; t += 50) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
 
 static void LogHeap(const char* stage) {
     ESP_LOGI(TAG, "Heap [%s]: free=%u min=%u internal=%u largest_internal=%u",
@@ -444,7 +477,7 @@ static bool Feed(Feeder& f, const uint8_t* d, int n) {
 static void StreamOnce(int idx, uint32_t gen) {
     std::string url = kStations[idx].url;
     char* hdr = static_cast<char*>(malloc(2048));
-    uint8_t* buf = static_cast<uint8_t*>(malloc(1024));
+    uint8_t* buf = static_cast<uint8_t*>(malloc(kRecvBytes));
     if (hdr == nullptr || buf == nullptr) {
         free(hdr);
         free(buf);
@@ -519,7 +552,7 @@ static void StreamOnce(int idx, uint32_t gen) {
         ESP_LOGW(TAG, "Open stream failed: %s", err.c_str());
         if (g_gen.load() == gen) {
             ShowLine(err);
-            vTaskDelay(pdMS_TO_TICKS(3000));
+            SleepInterruptible(3000, gen);
         }
         free(hdr);
         free(buf);
@@ -544,7 +577,7 @@ static void StreamOnce(int idx, uint32_t gen) {
     }
     int read_timeouts = 0;
     while (ok && g_gen.load() == gen) {
-        int n = ConnRecv(conn, buf, 1024, gen);
+        int n = ConnRecv(conn, buf, kRecvBytes, gen);
         if (n == kConnReadTimedOut) {
             if (++read_timeouts < kConnReadTimeoutLimit) {
                 continue;
@@ -574,14 +607,23 @@ static void NetTask(void*) {
         return;
     }
     while (true) {
+        // Doi nguoi dung ngung bam nut (bam nhanh nhieu lan thi bo qua cac dai trung gian)
         uint32_t gen = g_gen.load();
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(kSettleMs));
+            uint32_t now_gen = g_gen.load();
+            if (now_gen == gen) {
+                break;
+            }
+            gen = now_gen;
+        }
         int idx = g_station.load();
         ShowLine(std::string(kStations[idx].name) + " ...");
         StreamOnce(idx, gen);
         if (g_gen.load() == gen) {
             // mat ket noi: thu lai sau 2 giay
             ShowLine("Mat ket noi, thu lai...");
-            vTaskDelay(pdMS_TO_TICKS(2000));
+            SleepInterruptible(2000, gen);
         }
     }
 }
@@ -728,10 +770,7 @@ void NextStation() {
     int idx = (g_station.load() + 1) % kStationCount;
     g_station = idx;
     g_gen++;
-    {
-        Settings settings("eri", true);
-        settings.SetInt("rstation", idx);
-    }
+    ScheduleSave();
     ShowLine(std::string(kStations[idx].name) + " ...");
 }
 
@@ -742,10 +781,7 @@ void VolumeStep(int delta) {
     }
     v = std::max(v, 0);
     g_volume = v;
-    {
-        Settings settings("eri", true);
-        settings.SetInt("rvol", v);
-    }
+    ScheduleSave();
     Disp()->ShowNotification("Am luong " + std::to_string(v), 1500);
 }
 
