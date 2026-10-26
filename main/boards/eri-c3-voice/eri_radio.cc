@@ -179,7 +179,7 @@ static void WriteSilence() {
 
 static bool EnsureWifi() {
     if (SsidManager::GetInstance().GetSsidList().empty()) {
-        UiState(EriUi::kRadioError, "Chua co WiFi - vao Chat AI de cai");
+        UiState(EriUi::kRadioError, "No WiFi - set up in Chat AI");
         return false;
     }
 
@@ -193,14 +193,14 @@ static bool EnsureWifi() {
     });
     wifi.StartStation();
 
-    UiState(EriUi::kRadioConnecting, "Dang ket noi WiFi...");
+    UiState(EriUi::kRadioConnecting, "Connecting WiFi...");
     while (!wifi.IsConnected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
     if (ps_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to disable Wi-Fi power save: %s", esp_err_to_name(ps_err));
-        UiState(EriUi::kRadioConnecting, "Khong tat duoc WiFi sleep");
+        UiState(EriUi::kRadioConnecting, "WiFi sleep failed");
     } else {
         ESP_LOGI(TAG, "Wi-Fi power save disabled for radio playback");
     }
@@ -336,7 +336,7 @@ static bool ConnOpen(Conn& c, const Url& u, std::string& err) {
         cfg.timeout_ms = 8000;
         c.tls = esp_tls_init();
         if (c.tls == nullptr) {
-            err = "Het bo nho TLS";
+            err = "TLS out of memory";
             return false;
         }
         int r = esp_tls_conn_new_sync(u.host.c_str(), u.host.size(), u.port, &cfg, c.tls);
@@ -364,13 +364,13 @@ static bool ConnOpen(Conn& c, const Url& u, std::string& err) {
     char port[8];
     snprintf(port, sizeof(port), "%d", u.port);
     if (getaddrinfo(u.host.c_str(), port, &hints, &res) != 0 || res == nullptr) {
-        err = "Khong tim thay may chu";
+        err = "Server not found";
         return false;
     }
     int s = socket(res->ai_family, res->ai_socktype, 0);
     if (s < 0) {
         freeaddrinfo(res);
-        err = "Loi socket";
+        err = "Socket error";
         return false;
     }
     struct timeval tv = {kConnReadTimeoutMs / 1000, (kConnReadTimeoutMs % 1000) * 1000};
@@ -379,7 +379,7 @@ static bool ConnOpen(Conn& c, const Url& u, std::string& err) {
     if (connect(s, res->ai_addr, res->ai_addrlen) != 0) {
         freeaddrinfo(res);
         close(s);
-        err = "Khong ket noi duoc";
+        err = "Connection failed";
         return false;
     }
     freeaddrinfo(res);
@@ -404,7 +404,7 @@ static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& b
                       "Icy-MetaData: 0\r\nConnection: close\r\n\r\n";
     if (ConnSend(c, req.data(), req.size(), gen) < 0) {
         ConnClose(c);
-        err = "Gui yeu cau loi";
+        err = "Request failed";
         return false;
     }
 
@@ -421,7 +421,7 @@ static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& b
                 continue;
             }
             ConnClose(c);
-            err = "Khong co phan hoi";
+            err = "No response";
             return false;
         }
         if (n == kConnCancelled) {
@@ -430,7 +430,7 @@ static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& b
         }
         if (n <= 0) {
             ConnClose(c);
-            err = "Khong co phan hoi";
+            err = "No response";
             return false;
         }
         read_timeouts = 0;
@@ -444,7 +444,7 @@ static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& b
         }
     }
     ConnClose(c);
-    err = "Header qua dai";
+    err = "Header too long";
     return false;
 }
 
@@ -500,7 +500,7 @@ static void StreamOnce(int idx, uint32_t gen) {
     if (hdr == nullptr || buf == nullptr) {
         free(hdr);
         free(buf);
-        UiState(EriUi::kRadioError, "Het bo nho");
+        UiState(EriUi::kRadioError, "Out of memory");
         vTaskDelay(pdMS_TO_TICKS(3000));
         return;
     }
@@ -512,7 +512,7 @@ static void StreamOnce(int idx, uint32_t gen) {
     for (int redirect = 0; redirect < 4; ++redirect) {
         Url u;
         if (!ParseUrl(url, u)) {
-            err = "URL sai";
+            err = "Bad URL";
             break;
         }
         if (!OpenHttp(conn, u, hdr, 2048, body_off, total, err, gen)) {
@@ -532,7 +532,7 @@ static void StreamOnce(int idx, uint32_t gen) {
             bool has = HeaderValue(hdr, "location:", loc);
             ConnClose(conn);
             if (!has || loc.empty()) {
-                err = "Redirect loi";
+                err = "Redirect error";
                 break;
             }
             if (loc[0] == '/') {
@@ -551,13 +551,13 @@ static void StreamOnce(int idx, uint32_t gen) {
     if (conn.Valid()) {
         std::string v;
         if (HeaderValue(hdr, "transfer-encoding:", v) && strcasestr(v.c_str(), "chunked")) {
-            err = "Chunked chua ho tro";
+            err = "Chunked not supported";
         } else if (HeaderValue(hdr, "content-type:", v) && strcasestr(v.c_str(), "text/html")) {
-            err = "May chu tra ve trang web";
+            err = "Server sent a web page";
         } else if (HeaderValue(hdr, "content-type:", v) &&
                    (strcasestr(v.c_str(), "aac") || strcasestr(v.c_str(), "ogg") ||
                     strcasestr(v.c_str(), "mp4") || strcasestr(v.c_str(), "flac"))) {
-            err = "Chi ho tro MP3";
+            err = "MP3 only";
         }
         if (!err.empty()) {
             ConnClose(conn);
@@ -566,7 +566,7 @@ static void StreamOnce(int idx, uint32_t gen) {
 
     if (!conn.Valid()) {
         if (err.empty()) {
-            err = "Qua nhieu redirect";
+            err = "Too many redirects";
         }
         ESP_LOGW(TAG, "Open stream failed: %s", err.c_str());
         if (g_gen.load() == gen) {
@@ -641,7 +641,7 @@ static void NetTask(void*) {
         StreamOnce(idx, gen);
         if (g_gen.load() == gen) {
             // mat ket noi: thu lai sau 2 giay
-            UiState(EriUi::kRadioError, "Mat ket noi, thu lai...");
+            UiState(EriUi::kRadioError, "Connection lost, retrying...");
             SleepInterruptible(2000, gen);
         }
     }
@@ -683,7 +683,7 @@ static void PlayTask(void*) {
     int16_t* st = static_cast<int16_t*>(malloc(kPcmBytes));
     if (in == nullptr || pcm == nullptr || st == nullptr || !dec.Open()) {
         ESP_LOGE(TAG, "Play task init failed");
-        UiState(EriUi::kRadioError, "Loi bo giai ma MP3");
+        UiState(EriUi::kRadioError, "MP3 decoder error");
         vTaskDelete(nullptr);
         return;
     }
@@ -774,11 +774,11 @@ void Start() {
         g_volume = std::clamp(static_cast<int>(settings.GetInt("rvol", 60)), 0, 100);
     }
 
-    UiState(EriUi::kRadioConnecting, "Khoi dong...");
+    UiState(EriUi::kRadioConnecting, "Starting...");
     xTaskCreate(UiTask, "eri_ui", 4096, nullptr, 3, nullptr);
 
     if (!InitI2s()) {
-        UiState(EriUi::kRadioError, "Loi I2S");
+        UiState(EriUi::kRadioError, "I2S error");
         return;
     }
     g_stream = xStreamBufferCreate(kStreamBufBytes, 1);
@@ -786,7 +786,7 @@ void Start() {
         g_stream = xStreamBufferCreate(kStreamBufBytes / 2, 1);
     }
     if (g_stream == nullptr) {
-        UiState(EriUi::kRadioError, "Het bo nho");
+        UiState(EriUi::kRadioError, "Out of memory");
         return;
     }
     LogHeap("stream buffer allocated");

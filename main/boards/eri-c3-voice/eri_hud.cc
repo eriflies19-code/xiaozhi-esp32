@@ -56,7 +56,7 @@ static void LogHeap(const char* stage) {
 // ================================================================ am thanh (chi bip khi vuot toc do)
 
 static constexpr int kSampleRate = 16000;
-static constexpr float kBeepVol = 0.1f;  // 0.0 - 1.0
+static constexpr float kBeepVol = 0.2f;  // 0.0 - 1.0
 static i2s_chan_handle_t g_tx = nullptr;
 static int16_t g_sine[256];
 

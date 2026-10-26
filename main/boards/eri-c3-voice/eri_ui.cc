@@ -43,9 +43,9 @@ void DrawMenu(int sel, int ms_left, int ms_total) {
         int w = 124 * std::max(ms_left, 0) / ms_total;
         Frame(2, 59, 124, 4);
         Box(2, 59, w, 4);
-        TextC(kFontS, 64, 55, "10: doi   4: chon");
+        TextC(kFontS, 64, 55, "10: next   4: select");
     } else {
-        TextC(kFontS, 64, 58, "10: doi muc    4: chon");
+        TextC(kFontS, 64, 58, "10: next    4: select");
     }
 }
 
@@ -79,7 +79,6 @@ void DrawRadio(const RadioView& v) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d/%d", v.index + 1, v.count);
     TextR(kFontS, 126, 9, idx);
-    Box(0, 12, kW, 1);
 
     // Ten dai
     Marquee(v.name, 27, v.t_ms);
@@ -87,10 +86,10 @@ void DrawRadio(const RadioView& v) {
     // Dong trang thai
     const char* st = v.msg;
     if (st == nullptr || st[0] == 0) {
-        st = v.phase == kRadioPlaying ? "Dang phat"
-             : v.phase == kRadioBuffering ? "Dang nap bo dem..."
-             : v.phase == kRadioError ? "Loi"
-                                      : "Dang ket noi...";
+        st = v.phase == kRadioPlaying ? "Playing"
+             : v.phase == kRadioBuffering ? "Buffering..."
+             : v.phase == kRadioError ? "Error"
+                                      : "Connecting...";
     }
     TextC(kFontS, 64, 38, st);
 
@@ -235,9 +234,9 @@ void DrawHud(const HudView& v) {
     if (!v.fresh) {
         Draw(icNav, 52, 4);
         TextC(kFontM, 64, 42, "WAZE HUD");
-        TextC(kFontS, 64, 56, v.connected ? "Cho du lieu Waze..." : "Cho ket noi BLE...");
+        TextC(kFontS, 64, 56, v.connected ? "Waiting for Waze..." : "Waiting for BLE...");
         if (v.demo) {
-            Text(kFontS, 1, 62, "DEMO");
+            Text(kFontS, 1, 55, "DEMO");
         }
         return;
     }
@@ -266,8 +265,9 @@ void DrawHud(const HudView& v) {
 
     // ---- Toc do hien tai (phai tren) + trang thai
     snprintf(b, sizeof(b), "%d", h.spd);
-    const int unit_w = TextWidth(kFontS, "km/h");
-    TextR(kFontS, 126, 19, "km/h");
+    //const int unit_w = TextWidth(kFontS, "km/h");
+    const int unit_w = 0;
+    //TextR(kFontS, 126, 19, "km/h");
     TextR(kFontL, 126 - unit_w - 3, 19, b);
     if (v.connected) {
         Draw(icBt, 59, 2);
@@ -416,7 +416,11 @@ static void Smile(int cx, int cy, bool open) {
 }
 
 static void DrawFace(int emo, int cx, int cy, uint32_t t, bool speaking) {
-    RoundFrame(cx - 17, cy - 15, 34, 30, 10);
+    Ring(cx, cy, 15, 2);                       // dau tron
+    Box(cx - 1, cy - 18, 2, 3);                // than ang-ten
+    Disc(cx, cy - 19, 2);                      // dau ang-ten
+    RoundBox(cx - 19, cy - 4, 4, 9, 2);        // tai nghe trai
+    RoundBox(cx + 16, cy - 4, 4, 9, 2);        // tai nghe phai
     const int ex = 8, ey = cy - 4;  // lech mat
     bool blink = (t % 3600) < 130 && emo != kFSleepy;
 
@@ -444,8 +448,8 @@ static void DrawFace(int emo, int cx, int cy, uint32_t t, bool speaking) {
             Box(cx + ex - 3, ey + 1, 7, 2);
             break;
         case kFCool:
-            Box(cx - 13, ey - 3, 11, 6);
-            Box(cx + 2, ey - 3, 11, 6);
+            Box(cx - 11, ey - 3, 9, 6);
+            Box(cx + 2, ey - 3, 9, 6);
             Box(cx - 2, ey - 2, 4, 2);
             break;
         case kFWink:
@@ -456,13 +460,13 @@ static void DrawFace(int emo, int cx, int cy, uint32_t t, bool speaking) {
         case kFAngry:
             RoundBox(cx - ex - 2, ey - 2, 5, 6, 2);
             RoundBox(cx + ex - 2, ey - 2, 5, 6, 2);
-            Line2(cx - ex - 4, ey - 7, cx - ex + 3, ey - 4);
-            Line2(cx + ex + 4, ey - 7, cx + ex - 3, ey - 4);
+            Line2(cx - ex - 2, ey - 6, cx - ex + 3, ey - 4);
+            Line2(cx + ex + 2, ey - 6, cx + ex - 3, ey - 4);
             break;
         case kFThink:
             RoundBox(cx - ex - 2, ey - 4, 5, 8, 2);
             RoundBox(cx + ex - 2, ey - 4, 5, 8, 2);
-            Line(cx + ex - 4, ey - 8, cx + ex + 4, ey - 9);
+            Line(cx + ex - 3, ey - 7, cx + ex + 2, ey - 8);
             break;
         default:  // neutral, sad, cry
             if (blink) {
@@ -515,7 +519,7 @@ static void DrawFace(int emo, int cx, int cy, uint32_t t, bool speaking) {
             break;
         case kFSleepy:
             Box(cx - 3, my, 7, 2);
-            Text(kFontS, cx + 14, cy - 10 - static_cast<int>((t / 300) % 3), "z");
+            Text(kFontS, cx + 21, cy - 8 - static_cast<int>((t / 300) % 3), "z");
             break;
         default:
             Box(cx - 5, my, 11, 2);
@@ -523,28 +527,29 @@ static void DrawFace(int emo, int cx, int cy, uint32_t t, bool speaking) {
     }
 }
 
-static void DrawWaves(int x0, int x1, int cy, int mode, uint32_t t) {
-    const int bw = 3, step = 5;
-    int n = (x1 - x0) / step;
-    for (int i = 0; i < n; ++i) {
+static void DrawWaves(int cx, int cy, int mode, uint32_t t) {
+    const int n = 7;  // so vach moi ben, k = 0 la gan dau
+    for (int k = 0; k < n; ++k) {
         int h = 2;
         if (mode == kChatListening || mode == kChatSpeaking) {
-            uint32_t k = (t / 70) * 7919u + static_cast<uint32_t>(i) * 104729u;
-            k ^= k >> 7;
-            k *= 2654435761u;
-            k ^= k >> 15;
-            int r = static_cast<int>(k % 100);
-            int env = 40 + (i < n / 2 ? i : n - 1 - i) * 60 / (n / 2);  // cao o giua
-            int amp = mode == kChatSpeaking ? 26 : 16;
+            uint32_t q = (t / 70) * 7919u + static_cast<uint32_t>(k) * 104729u;
+            q ^= q >> 7;
+            q *= 2654435761u;
+            q ^= q >> 15;
+            int r = static_cast<int>(q % 100);
+            int env = 100 - k * 9;
+            int amp = mode == kChatSpeaking ? 28 : 16;
             h = 2 + amp * r / 100 * env / 100;
         } else if (mode == kChatBusy) {
-            h = ((t / 110 + i) % n < 3) ? 7 : 2;  // song chay cho
+            h = (static_cast<int>(t / 110) % (n + 3) == (n - 1 - k)) ? 8 : 2;
         }
-        h &= ~1;  // doi xung quanh duong giua
+        h &= ~1;
         if (h < 2) {
             h = 2;
         }
-        Box(x0 + i * step, cy - h / 2, bw, h);
+        int x = cx - 24 - k * 5;
+        Box(x, cy - h / 2, 3, h);
+        Box(2 * cx - 3 - x, cy - h / 2, 3, h);
     }
 }
 
@@ -598,14 +603,14 @@ void DrawChat(const ChatView& v) {
         }
     }
     if (v.wifi == 0) {
-        Line(14, 2, 18, 8);
-        Line(18, 2, 14, 8);
+        Line(14, 3, 18, 9);
+        Line(18, 3, 14, 9);
     }
     const char* top = (v.notif != nullptr && v.notif[0]) ? v.notif : v.status;
     if (top != nullptr && top[0]) {
         int w = TextWidth(kFontS, top);
-        if (w <= 100) {
-            TextC(kFontS, 66, 9, top);
+        if (w <= 90) {
+            Text(kFontS, 19, 9, top);
         } else {
             int cycle = w + 24;
             int off = static_cast<int>((v.t_ms / 40) % static_cast<uint32_t>(cycle));
@@ -613,7 +618,7 @@ void DrawChat(const ChatView& v) {
             Text(kFontS, 108 - off, 9, top);
             Text(kFontS, 108 - off + cycle, 9, top);
             SetColor(false);
-            Box(0, 0, 22, 12);  // che phan tran sang vung WiFi
+            Box(0, 0, 19, 12);  // che phan tran sang vung WiFi
             SetColor(true);
             // ve lai WiFi sau khi che
             for (int b = 0; b < 4; ++b) {
@@ -627,18 +632,22 @@ void DrawChat(const ChatView& v) {
             }
         }
     }
-    Box(0, 12, kW, 1);
 
     // ---- Giua: bieu cam + song am
     int emo = FaceFor(v.emotion != nullptr ? v.emotion : "");
-    DrawFace(emo, 23, 29, v.t_ms, v.mode == kChatSpeaking);
-    DrawWaves(48, 126, 29, v.mode, v.t_ms);
+    DrawFace(emo, 64, 30, v.t_ms, v.mode == kChatSpeaking);
+    DrawWaves(64, 30, v.mode, v.t_ms);
+    if (v.mode == kChatListening) {  // bieu tuong mic goc phai tren
+        RoundBox(122, 1, 4, 6, 2);
+        Box(120, 5, 1, 2);
+        Box(127, 5, 1, 2);
+        Box(121, 8, 6, 1);
+    }
 
     // ---- Duoi: chu AI noi (2 dong, tu lat trang)
-    Box(0, 45, kW, 1);
     const char* msg = v.msg != nullptr ? v.msg : "";
     if (msg[0] == 0) {
-        TextC(kFontS, 64, 58, v.mode == kChatIdle ? "Noi 'Hi,ESP' hoac bam nut 4" : "...");
+        TextC(kFontS, 64, 58, v.mode == kChatIdle ? "Say 'Hi,ESP' or press 4" : "...");
         return;
     }
     int starts[24], lens[24];
@@ -657,9 +666,9 @@ void DrawChat(const ChatView& v) {
         int base = 54 + r * 8;
         if (r == 0 && page == 0 && v.msg_is_user) {
             Text(kFontS, 1, base, ">");
-            Text(kFontS, 8, base, buf);
+            TextC(kFontS, 64, base, buf);
         } else {
-            Text(kFontS, 2, base, buf);
+            TextC(kFontS, 64, base, buf);
         }
     }
     if (pages > 1) {  // cham bao so trang

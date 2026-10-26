@@ -107,7 +107,7 @@ bool Run() {
     // Chat AI can LVGL nguyen ven: khoi dong lai de LVGL chay tu dau (lan sau bo qua menu)
     EriGfx::Clear();
     EriGfx::SetColor(true);
-    EriGfx::TextC(EriGfx::kFontM, 64, 36, "Chat AI...");
+    EriGfx::TextC(EriGfx::kFontM, 64, 36, "Starting Chat AI...");
     EriScreen::Present();
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
@@ -189,11 +189,11 @@ void RestartToMenu() {
         settings.SetInt("stay", 1);
     }
     if (Current() == Mode::kChat) {
-        Board::GetInstance().GetDisplay()->ShowNotification("Ve menu...", 1500);
+        Board::GetInstance().GetDisplay()->ShowNotification("Back to menu...", 1500);
     } else {
         EriGfx::Clear();
         EriGfx::SetColor(true);
-        EriGfx::TextC(EriGfx::kFontM, 64, 36, "Ve menu...");
+        EriGfx::TextC(EriGfx::kFontM, 64, 36, "Back to menu...");
         EriScreen::Present();
     }
     vTaskDelay(pdMS_TO_TICKS(600));
