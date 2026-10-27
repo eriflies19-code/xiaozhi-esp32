@@ -1,6 +1,7 @@
 #include "eri_chat_display.h"
 
 #include "application.h"
+#include "eri_battery.h"
 #include "eri_screen.h"
 #include "eri_ui.h"
 
@@ -118,6 +119,7 @@ void EriChatDisplay::Loop() {
         v.msg = msg.c_str();
         v.msg_is_user = user;
         v.wifi = wifi;
+        v.batt = EriBattery::Percent();
         v.mode = mode;
         v.t_ms = static_cast<uint32_t>(now / 1000);
         v.msg_age_ms = static_cast<uint32_t>((now - since) / 1000);

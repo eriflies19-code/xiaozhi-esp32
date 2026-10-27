@@ -5,6 +5,8 @@
 #include "eri_ui.h"
 #include "config.h"
 #include "eri_mp3.h"
+#include "eri_battery.h"
+#include "eri_radio_page.h"
 #include "eri_stations.h"
 #include "settings.h"
 #include "assets/lang_config.h"
@@ -14,6 +16,8 @@
 
 #include <driver/i2s_std.h>
 #include <esp_heap_caps.h>
+#include <esp_http_server.h>
+#include <esp_netif.h>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <esp_timer.h>
@@ -32,13 +36,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #define TAG "EriRadio"
 
 namespace EriRadio {
 
-static constexpr int kStationCount = sizeof(kStations) / sizeof(kStations[0]);
 static constexpr size_t kStreamBufBytes = 32 * 1024;  // bo dem mang
 static constexpr size_t kPrebufferBytes = 12 * 1024;  // dem truoc khi phat
 static constexpr int kInBufBytes = 3072;              // du chua 1 khung MP3 (toi da ~1441 byte)
@@ -50,6 +55,13 @@ static constexpr int kConnCancelled = -3;
 static constexpr int kSettleMs = 350;     // cho nguoi dung ngung bam nut roi moi ket noi
 static constexpr int kSaveDelayMs = 2000; // ghi NVS tre, tranh dung flash luc dang phat
 static constexpr int kRecvBytes = 2048;
+static constexpr int kMaxStations = 20;       // toi da trong danh sach luu tren NVS
+static constexpr size_t kMaxListBytes = 3800; // NVS: chuoi toi da ~4000 byte
+static constexpr size_t kMaxNameLen = 23;
+static constexpr size_t kMaxUrlLen = 159;
+
+static void SelectStation(int idx);
+static void StartWeb();
 
 static std::atomic<int> g_station{0};
 static std::atomic<int> g_volume{60};
@@ -59,6 +71,138 @@ static StreamBufferHandle_t g_stream = nullptr;
 static i2s_chan_handle_t g_tx = nullptr;
 static int g_rate = 0;
 static esp_timer_handle_t g_save_timer = nullptr;
+
+// ---------------------------------------------------------------- danh sach dai
+// Mac dinh lay tu eri_stations.h; neu trang web da luu danh sach thi dung ban luu tren NVS ("rlist").
+
+struct Entry {
+    std::string name;
+    std::string url;
+};
+static std::vector<Entry> g_list;
+static std::mutex g_list_mu;
+
+static void CopyStr(char* dst, size_t cap, const char* src) {
+    size_t n = strlen(src);
+    if (n >= cap) {
+        n = cap - 1;
+    }
+    memcpy(dst, src, n);
+    dst[n] = 0;
+}
+
+static std::string Trim(std::string t) {
+    size_t a = 0;
+    while (a < t.size() && (t[a] == ' ' || t[a] == '\t' || t[a] == '\r')) {
+        a++;
+    }
+    size_t b = t.size();
+    while (b > a && (t[b - 1] == ' ' || t[b - 1] == '\t' || t[b - 1] == '\r')) {
+        b--;
+    }
+    return t.substr(a, b - a);
+}
+
+// Moi dong: ten|url. Bo dong sai. Ten doi sang ASCII khong dau (font OLED).
+static int ParseList(const std::string& text, std::vector<Entry>& out) {
+    out.clear();
+    size_t pos = 0;
+    while (pos <= text.size() && static_cast<int>(out.size()) < kMaxStations) {
+        size_t nl = text.find('\n', pos);
+        std::string line = text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+        pos = nl == std::string::npos ? text.size() + 1 : nl + 1;
+        size_t bar = line.find('|');
+        if (bar == std::string::npos) {
+            continue;
+        }
+        std::string name = Trim(line.substr(0, bar));
+        std::string url = Trim(line.substr(bar + 1));
+        if (url.compare(0, 7, "http://") != 0 && url.compare(0, 8, "https://") != 0) {
+            continue;
+        }
+        if (url.size() > kMaxUrlLen) {
+            continue;
+        }
+        char buf[96];
+        EriUi::FoldAscii(name.c_str(), buf, sizeof(buf));
+        name = Trim(buf);
+        if (name.size() > kMaxNameLen) {
+            name.resize(kMaxNameLen);
+        }
+        if (name.empty()) {
+            name = "Station " + std::to_string(out.size() + 1);
+        }
+        out.push_back({name, url});
+    }
+    return static_cast<int>(out.size());
+}
+
+static std::string SerializeList(const std::vector<Entry>& l) {
+    std::string r;
+    for (const auto& e : l) {
+        r += e.name;
+        r += '|';
+        r += e.url;
+        r += '\n';
+    }
+    return r;
+}
+
+static void LoadList() {
+    std::vector<Entry> l;
+    {
+        Settings settings("eri", false);
+        std::string raw = settings.GetString("rlist", "");
+        if (!raw.empty()) {
+            ParseList(raw, l);
+        }
+    }
+    if (l.empty()) {
+        for (const auto& st : kStations) {
+            l.push_back({st.name, st.url});
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_list_mu);
+    g_list = std::move(l);
+}
+
+static int Count() {
+    std::lock_guard<std::mutex> lock(g_list_mu);
+    return static_cast<int>(g_list.size());
+}
+
+static bool GetUrl(int idx, std::string& url) {
+    std::lock_guard<std::mutex> lock(g_list_mu);
+    if (idx < 0 || idx >= static_cast<int>(g_list.size())) {
+        return false;
+    }
+    url = g_list[idx].url;
+    return true;
+}
+
+static void CopyName(int idx, char* out, size_t cap) {
+    std::lock_guard<std::mutex> lock(g_list_mu);
+    if (idx < 0 || idx >= static_cast<int>(g_list.size())) {
+        out[0] = 0;
+        return;
+    }
+    CopyStr(out, cap, g_list[idx].name.c_str());
+}
+
+// Ten bai dang phat (ICY StreamTitle), da doi sang ASCII
+static std::mutex g_title_mu;
+static char g_title[96] = "";
+static char g_ip[16] = "";
+
+static void SetTitle(const char* t) {
+    std::lock_guard<std::mutex> lock(g_title_mu);
+    CopyStr(g_title, sizeof(g_title), t);
+}
+
+static void GetTitle(char* out, size_t cap) {
+    std::lock_guard<std::mutex> lock(g_title_mu);
+    CopyStr(out, cap, g_title);
+}
 
 // Ghi dai/am luong vao NVS sau khi het thao tac (ghi flash lam khung CPU, gay giat am thanh)
 static void SaveSettingsCb(void*) {
@@ -112,11 +256,18 @@ static void UiState(int phase, const char* msg) {
 static void UiTask(void*) {
     while (true) {
         EriUi::RadioView v;
-        int idx = std::clamp(g_station.load(), 0, kStationCount - 1);
-        v.name = kStations[idx].name;
+        int count = std::max(Count(), 1);
+        int idx = std::clamp(g_station.load(), 0, count - 1);
+        char name[40], title[96];
+        CopyName(idx, name, sizeof(name));
+        GetTitle(title, sizeof(title));
+        v.name = name;
+        v.title = title;
+        v.ip = g_ip;
+        v.batt = EriBattery::Percent();
         v.msg = g_msg;
         v.index = idx;
-        v.count = kStationCount;
+        v.count = count;
         v.volume = g_volume.load();
         v.phase = g_phase.load();
         v.level = g_level.load();
@@ -401,7 +552,7 @@ static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& b
 
     std::string req = "GET " + u.path + " HTTP/1.0\r\nHost: " + u.host +
                       "\r\nUser-Agent: WinampMPEG/5.0\r\nAccept: */*\r\n"
-                      "Icy-MetaData: 0\r\nConnection: close\r\n\r\n";
+                      "Icy-MetaData: 1\r\nConnection: close\r\n\r\n";
     if (ConnSend(c, req.data(), req.size(), gen) < 0) {
         ConnClose(c);
         err = "Request failed";
@@ -452,23 +603,51 @@ static bool OpenHttp(Conn& c, const Url& u, char* hdr, size_t hdr_cap, size_t& b
 
 struct Feeder {
     uint32_t gen;
-    int metaint;   // 0 = khong co metadata chen
-    int to_meta;   // so byte con lai truoc khi toi khoi metadata
-    int meta_skip; // so byte metadata can bo qua
+    int metaint;    // 0 = khong co metadata chen
+    int to_meta;    // so byte con lai truoc khi toi khoi metadata
+    int meta_skip;  // so byte metadata con phai doc
+    char meta[256];
+    int meta_len;
 };
 
-// Day du lieu vao bo dem, bo metadata ICY neu co. Tra ve false neu doi dai (gen doi).
+// Tach StreamTitle='...'; tu khoi metadata ICY
+static void ParseMeta(const char* m) {
+    const char* p = strstr(m, "StreamTitle='");
+    if (p == nullptr) {
+        return;
+    }
+    p += 13;
+    const char* e = strstr(p, "';");
+    std::string t(p, e != nullptr ? static_cast<size_t>(e - p) : strlen(p));
+    char buf[96];
+    EriUi::FoldAscii(t.c_str(), buf, sizeof(buf));
+    SetTitle(Trim(buf).c_str());
+}
+
+// Day du lieu vao bo dem, tach metadata ICY neu co. Tra ve false neu doi dai (gen doi).
 static bool Feed(Feeder& f, const uint8_t* d, int n) {
     int i = 0;
     while (i < n) {
         if (f.meta_skip > 0) {
             int k = std::min(f.meta_skip, n - i);
+            int room = static_cast<int>(sizeof(f.meta)) - 1 - f.meta_len;
+            int c = std::min(k, std::max(room, 0));
+            if (c > 0) {
+                memcpy(f.meta + f.meta_len, d + i, c);
+                f.meta_len += c;
+            }
             i += k;
             f.meta_skip -= k;
+            if (f.meta_skip == 0 && f.meta_len > 0) {
+                f.meta[f.meta_len] = 0;
+                ParseMeta(f.meta);
+                f.meta_len = 0;
+            }
             continue;
         }
         if (f.metaint > 0 && f.to_meta == 0) {
             f.meta_skip = d[i] * 16;
+            f.meta_len = 0;
             i++;
             f.to_meta = f.metaint;
             continue;
@@ -494,7 +673,13 @@ static bool Feed(Feeder& f, const uint8_t* d, int n) {
 }
 
 static void StreamOnce(int idx, uint32_t gen) {
-    std::string url = kStations[idx].url;
+    std::string url;
+    if (!GetUrl(idx, url)) {
+        UiState(EriUi::kRadioError, "No stations");
+        SleepInterruptible(2000, gen);
+        return;
+    }
+    SetTitle("");
     char* hdr = static_cast<char*>(malloc(2048));
     uint8_t* buf = static_cast<uint8_t*>(malloc(kRecvBytes));
     if (hdr == nullptr || buf == nullptr) {
@@ -589,7 +774,10 @@ static void StreamOnce(int idx, uint32_t gen) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-    Feeder f{gen, metaint, metaint, 0};
+    Feeder f = {};
+    f.gen = gen;
+    f.metaint = metaint;
+    f.to_meta = metaint;
     bool ok = Feed(f, reinterpret_cast<uint8_t*>(hdr) + body_off, static_cast<int>(total - body_off));
     if (ok) {
         UiState(EriUi::kRadioBuffering, "");
@@ -625,6 +813,7 @@ static void NetTask(void*) {
         vTaskDelete(nullptr);
         return;
     }
+    StartWeb();
     while (true) {
         // Doi nguoi dung ngung bam nut (bam nhanh nhieu lan thi bo qua cac dai trung gian)
         uint32_t gen = g_gen.load();
@@ -762,15 +951,193 @@ static void PlayTask(void*) {
     }
 }
 
+// ---------------------------------------------------------------- web
+
+static void JsonEsc(const char* in, std::string& out) {
+    for (; *in; ++in) {
+        unsigned char c = static_cast<unsigned char>(*in);
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += static_cast<char>(c);
+        } else if (c >= 32 && c < 127) {
+            out += static_cast<char>(c);
+        }
+    }
+}
+
+static bool QueryInt(httpd_req_t* req, const char* key, int* out) {
+    char q[48], val[12];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK) {
+        return false;
+    }
+    if (httpd_query_key_value(q, key, val, sizeof(val)) != ESP_OK) {
+        return false;
+    }
+    *out = atoi(val);
+    return true;
+}
+
+static esp_err_t HRoot(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, kRadioPage, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t HState(httpd_req_t* req) {
+    char name[40], title[96];
+    int idx = g_station.load();
+    CopyName(idx, name, sizeof(name));
+    GetTitle(title, sizeof(title));
+    int ph = g_phase.load();
+    const char* p = ph == EriUi::kRadioPlaying     ? "Playing"
+                    : ph == EriUi::kRadioBuffering ? "Buffering..."
+                    : ph == EriUi::kRadioError     ? "Error"
+                                                   : "Connecting...";
+    std::string j = "{\"i\":" + std::to_string(idx) + ",\"v\":" + std::to_string(g_volume.load()) +
+                    ",\"n\":\"";
+    JsonEsc(name, j);
+    j += "\",\"t\":\"";
+    JsonEsc(title, j);
+    j += "\",\"p\":\"";
+    j += p;
+    j += "\",\"m\":\"";
+    JsonEsc(g_msg, j);
+    j += "\",\"b\":" + std::to_string(EriBattery::Percent()) + ",\"mv\":" + std::to_string(EriBattery::Millivolts()) + "}";
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, j.c_str(), HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t HPlay(httpd_req_t* req) {
+    int i = 0;
+    if (!QueryInt(req, "i", &i) || i < 0 || i >= Count()) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad station");
+    }
+    SelectStation(i);
+    return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t HVol(httpd_req_t* req) {
+    int v = 0;
+    if (!QueryInt(req, "v", &v)) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad volume");
+    }
+    g_volume = std::clamp(v, 0, 100);
+    ScheduleSave();
+    return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t HListGet(httpd_req_t* req) {
+    std::string s;
+    {
+        std::lock_guard<std::mutex> lock(g_list_mu);
+        s = SerializeList(g_list);
+    }
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_send(req, s.c_str(), HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t HListPost(httpd_req_t* req) {
+    size_t len = req->content_len;
+    if (len == 0 || len > 4096) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad size");
+    }
+    std::string body;
+    body.resize(len);
+    size_t got = 0;
+    int retry = 0;
+    while (got < len) {
+        int r = httpd_req_recv(req, &body[got], len - got);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++retry < 5) {
+            continue;
+        }
+        if (r <= 0) {
+            return ESP_FAIL;
+        }
+        got += r;
+    }
+    std::vector<Entry> nl;
+    if (ParseList(body, nl) == 0) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no valid station (need name|http://...)");
+    }
+    std::string ser = SerializeList(nl);
+    if (ser.size() > kMaxListBytes) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "list too long");
+    }
+    {
+        Settings settings("eri", true);
+        settings.SetString("rlist", ser);
+    }
+    std::string old_url, new_url;
+    int cur = g_station.load();
+    GetUrl(cur, old_url);
+    {
+        std::lock_guard<std::mutex> lock(g_list_mu);
+        g_list = std::move(nl);
+    }
+    int count = Count();
+    if (cur >= count) {
+        SelectStation(0);
+    } else if (!GetUrl(cur, new_url) || new_url != old_url) {
+        SelectStation(cur);  // dai dang phat bi doi url -> ket noi lai
+    }
+    return httpd_resp_sendstr(req, "ok");
+}
+
+static esp_err_t HReset(httpd_req_t* req) {
+    {
+        Settings settings("eri", true);
+        settings.EraseKey("rlist");
+    }
+    LoadList();
+    SelectStation(0);
+    return httpd_resp_sendstr(req, "ok");
+}
+
+static void AddUri(httpd_handle_t srv, const char* uri, httpd_method_t m,
+                   esp_err_t (*h)(httpd_req_t*)) {
+    httpd_uri_t u = {};
+    u.uri = uri;
+    u.method = m;
+    u.handler = h;
+    httpd_register_uri_handler(srv, &u);
+}
+
+static void StartWeb() {
+    esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t info;
+    if (nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK) {
+        esp_ip4addr_ntoa(&info.ip, g_ip, sizeof(g_ip));
+    }
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.stack_size = 6144;
+    cfg.max_open_sockets = 3;  // chua socket cho luong nhac
+    cfg.max_uri_handlers = 8;
+    cfg.lru_purge_enable = true;
+    cfg.task_priority = 3;  // thap hon task phat/mang
+    httpd_handle_t srv = nullptr;
+    if (httpd_start(&srv, &cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "Web server start failed");
+        return;
+    }
+    AddUri(srv, "/", HTTP_GET, HRoot);
+    AddUri(srv, "/api/state", HTTP_GET, HState);
+    AddUri(srv, "/api/list", HTTP_GET, HListGet);
+    AddUri(srv, "/api/list", HTTP_POST, HListPost);
+    AddUri(srv, "/api/play", HTTP_POST, HPlay);
+    AddUri(srv, "/api/vol", HTTP_POST, HVol);
+    AddUri(srv, "/api/reset", HTTP_POST, HReset);
+    ESP_LOGI(TAG, "Web control at http://%s/", g_ip);
+}
+
 // ---------------------------------------------------------------- giao dien
 
 void Start() {
     LogHeap("radio start");
     EriScreen::Begin();  // dung LVGL, tu day ve bang EriGfx
+    LoadList();
     {
         Settings settings("eri", false);
         int s = settings.GetInt("rstation", 0);
-        g_station = (s >= 0 && s < kStationCount) ? s : 0;
+        g_station = (s >= 0 && s < Count()) ? s : 0;
         g_volume = std::clamp(static_cast<int>(settings.GetInt("rvol", 60)), 0, 100);
     }
 
@@ -795,16 +1162,22 @@ void Start() {
     xTaskCreate(NetTask, "eri_net", 6144, nullptr, 5, nullptr);
 }
 
-void NextStation() {
-    if (kStationCount <= 1) {
-        return;
-    }
-    int idx = (g_station.load() + 1) % kStationCount;
+// Doi sang dai `idx` (nut bam hoac web)
+static void SelectStation(int idx) {
     g_station = idx;
     g_gen++;
     ScheduleSave();
     g_level = 0;
+    SetTitle("");
     UiState(EriUi::kRadioConnecting, "");
+}
+
+void NextStation() {
+    int count = Count();
+    if (count <= 1) {
+        return;
+    }
+    SelectStation((g_station.load() + 1) % count);
 }
 
 void VolumeStep(int delta) {

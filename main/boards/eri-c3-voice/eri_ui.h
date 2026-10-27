@@ -9,7 +9,7 @@ namespace EriUi {
 
 // ---- Menu chon che do. sel: 0 Chat AI, 1 Radio, 2 WAZE HUD.
 // ms_total = 0: dang cho (khong dem nguoc); nguoc lai ve thanh dem nguoc.
-void DrawMenu(int sel, int ms_left, int ms_total);
+void DrawMenu(int sel, int ms_left, int ms_total, int batt = -1);  // batt: 0..100, -1 = an
 
 // ---- Radio
 enum RadioPhase { kRadioConnecting = 0, kRadioBuffering, kRadioPlaying, kRadioError };
@@ -21,6 +21,9 @@ struct RadioView {
     int volume = 0;         // 0..100
     int phase = kRadioConnecting;
     int level = 0;          // 0..100, muc am luong dang phat (cho thanh nhay)
+    const char* title = "";  // ten bai dang phat (ICY), "" = chua co
+    const char* ip = "";     // dia chi web control, "" = chua co
+    int batt = -1;           // muc pin 0..100, -1 = khong hien
     uint32_t t_ms = 0;
 };
 void DrawRadio(const RadioView& v);
@@ -36,6 +39,7 @@ struct HudView {
     bool connected = false;  // BLE da ket noi
     bool demo = false;
     bool sound_on = true;
+    int batt = -1;
     uint32_t t_ms = 0;
 };
 void DrawHud(const HudView& v);
@@ -49,6 +53,7 @@ struct ChatView {
     const char* msg = "";      // chu AI noi (da doi sang ASCII)
     bool msg_is_user = false;
     int wifi = 0;              // 0 = mat ket noi, 1..4 = vach song
+    int batt = -1;             // muc pin 0..100, -1 = khong hien
     int mode = kChatIdle;
     uint32_t t_ms = 0;
     uint32_t msg_age_ms = 0;   // thoi gian ke tu khi chu thay doi (de lat trang)

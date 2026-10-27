@@ -5,6 +5,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "eri_battery.h"
 #include "eri_mode.h"
 
 #include <esp_log.h>
@@ -111,6 +112,7 @@ public:
         InitializeDisplayI2c();
         InitializeSsd1306Display();
         InitializeButtons();
+        EriBattery::Start();  // doc pin qua cau chia ap tren GPIO0
     }
 
     virtual AudioCodec* GetAudioCodec() override {

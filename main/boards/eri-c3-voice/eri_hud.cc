@@ -1,4 +1,5 @@
 #include "eri_hud.h"
+#include "eri_battery.h"
 #include "eri_screen.h"
 #include "eri_ui.h"
 
@@ -56,7 +57,7 @@ static void LogHeap(const char* stage) {
 // ================================================================ am thanh (chi bip khi vuot toc do)
 
 static constexpr int kSampleRate = 16000;
-static constexpr float kBeepVol = 0.2f;  // 0.0 - 1.0
+static constexpr float kBeepVol = 0.1f;  // 0.0 - 1.0
 static i2s_chan_handle_t g_tx = nullptr;
 static int16_t g_sine[256];
 
@@ -491,6 +492,7 @@ static void HudTask(void*) {
         view.demo = g_demo.load();
         view.sound_on = g_sound_on.load();
         view.t_ms = NowMs();
+        view.batt = EriBattery::Percent();
         EriUi::DrawHud(view);
         EriScreen::Present();
         vTaskDelay(pdMS_TO_TICKS(100));

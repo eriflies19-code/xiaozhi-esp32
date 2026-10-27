@@ -1,4 +1,5 @@
 #include "eri_mode.h"
+#include "eri_battery.h"
 #include "eri_gfx.h"
 #include "eri_hud.h"
 #include "eri_screen.h"
@@ -79,7 +80,7 @@ bool Run() {
                 break;  // het gio: dung che do lan truoc
             }
         }
-        EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0);
+        EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0, EriBattery::Percent());
         EriScreen::Present();
     }
 

@@ -15,7 +15,32 @@ namespace EriUi {
 
 // ================================================================ Menu
 
-void DrawMenu(int sel, int ms_left, int ms_total) {
+// Bieu tuong pin 15x7 (than 13 + dau cuc 2), ben phai ket thuc o `rx`. Co the kem so %.
+// Pin <= 10% thi nhap nhay phan ruot (khi co t_ms).
+static void DrawBattery(int rx, int y, int pct, bool text, uint32_t t_ms) {
+    if (pct < 0) {
+        return;
+    }
+    pct = std::clamp(pct, 0, 100);
+    const int x = rx - 14;
+    Frame(x, y, 13, 7);
+    Box(x + 13, y + 2, 2, 3);
+    int fw = (pct * 9 + 50) / 100;
+    if (pct > 0 && fw == 0) {
+        fw = 1;
+    }
+    bool off = pct <= 10 && t_ms != 0 && ((t_ms / 500) % 2) == 1;
+    if (!off) {
+        Box(x + 2, y + 2, fw, 3);
+    }
+    if (text) {
+        char b[16];
+        snprintf(b, sizeof(b), "%d%%", pct);
+        TextR(kFontS, x - 3, y + 6, b);
+    }
+}
+
+void DrawMenu(int sel, int ms_left, int ms_total, int batt) {
     Clear();
     SetColor(true);
 
@@ -43,9 +68,11 @@ void DrawMenu(int sel, int ms_left, int ms_total) {
         int w = 124 * std::max(ms_left, 0) / ms_total;
         Frame(2, 59, 124, 4);
         Box(2, 59, w, 4);
-        TextC(kFontS, 64, 55, "10: next   4: select");
+        Text(kFontS, 2, 55, "10:next 4:select");
+        DrawBattery(127, 49, batt, true, 0);
     } else {
-        TextC(kFontS, 64, 58, "10: next    4: select");
+        Text(kFontS, 2, 58, "10:next 4:select");
+        DrawBattery(127, 52, batt, true, 0);
     }
 }
 
@@ -69,6 +96,22 @@ static void Marquee(const char* s, int baseline, uint32_t t_ms) {
     Text(kFontM, 2 - off + cycle, baseline, s);
 }
 
+// Chu nho: vua man hinh thi canh giua, dai hon thi chay ngang
+static void MarqueeS(const char* s, int baseline, uint32_t t_ms) {
+    int w = TextWidth(kFontS, s);
+    if (w <= 124) {
+        TextC(kFontS, 64, baseline, s);
+        return;
+    }
+    const int cycle = w + 30;
+    int off = static_cast<int>((t_ms / 45) % static_cast<uint32_t>(cycle));
+    if (t_ms % (static_cast<uint32_t>(cycle) * 45 + 1200) < 1200) {
+        off = 0;  // dung 1,2 giay o dau cau
+    }
+    Text(kFontS, 2 - off, baseline, s);
+    Text(kFontS, 2 - off + cycle, baseline, s);
+}
+
 void DrawRadio(const RadioView& v) {
     Clear();
     SetColor(true);
@@ -79,19 +122,29 @@ void DrawRadio(const RadioView& v) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d/%d", v.index + 1, v.count);
     TextR(kFontS, 126, 9, idx);
+    DrawBattery(96, 2, v.batt, true, v.t_ms);
 
     // Ten dai
     Marquee(v.name, 27, v.t_ms);
 
     // Dong trang thai
     const char* st = v.msg;
+    char web[32];
     if (st == nullptr || st[0] == 0) {
         st = v.phase == kRadioPlaying ? "Playing"
              : v.phase == kRadioBuffering ? "Buffering..."
              : v.phase == kRadioError ? "Error"
                                       : "Connecting...";
+        if (v.phase == kRadioPlaying) {
+            if (v.ip != nullptr && v.ip[0] && (v.t_ms % 16000) < 3500) {
+                snprintf(web, sizeof(web), "Web: %s", v.ip);  // thinh thoang hien dia chi web
+                st = web;
+            } else if (v.title != nullptr && v.title[0]) {
+                st = v.title;
+            }
+        }
     }
-    TextC(kFontS, 64, 38, st);
+    MarqueeS(st, 38, v.t_ms);
 
     // Thanh nhay am thanh: 16 cot
     const int base = 52, maxh = 11;
@@ -235,8 +288,9 @@ void DrawHud(const HudView& v) {
         Draw(icNav, 52, 4);
         TextC(kFontM, 64, 42, "WAZE HUD");
         TextC(kFontS, 64, 56, v.connected ? "Waiting for Waze..." : "Waiting for BLE...");
+        DrawBattery(127, 1, v.batt, true, v.t_ms);
         if (v.demo) {
-            Text(kFontS, 1, 55, "DEMO");
+            Text(kFontS, 1, 62, "DEMO");
         }
         return;
     }
@@ -265,9 +319,8 @@ void DrawHud(const HudView& v) {
 
     // ---- Toc do hien tai (phai tren) + trang thai
     snprintf(b, sizeof(b), "%d", h.spd);
-    //const int unit_w = TextWidth(kFontS, "km/h");
-    const int unit_w = 0;
-    //TextR(kFontS, 126, 19, "km/h");
+    const int unit_w = TextWidth(kFontS, "km/h");
+    TextR(kFontS, 126, 19, "km/h");
     TextR(kFontL, 126 - unit_w - 3, 19, b);
     if (v.connected) {
         Draw(icBt, 59, 2);
@@ -278,6 +331,7 @@ void DrawHud(const HudView& v) {
     if (v.demo) {
         Text(kFontS, 59, 10, "DEMO");  // nho, de nhan biet dang chay du lieu gia
     }
+    DrawBattery(127, 1, v.batt, false, v.t_ms);
 
     // ---- Canh bao (uu tien) hoac mui ten re
     AlertIcon ai = {nullptr, 0, false};
@@ -592,7 +646,23 @@ void DrawChat(const ChatView& v) {
     Clear();
     SetColor(true);
 
-    // ---- Thanh tren: WiFi | trang thai
+    // ---- Thanh tren: WiFi | trang thai | pin
+    const char* top = (v.notif != nullptr && v.notif[0]) ? v.notif : v.status;
+    if (top != nullptr && top[0]) {
+        int w = TextWidth(kFontS, top);
+        if (w <= 66) {
+            Text(kFontS, 19, 9, top);
+        } else {
+            int cycle = w + 24;
+            int off = static_cast<int>((v.t_ms / 40) % static_cast<uint32_t>(cycle));
+            Text(kFontS, 88 - off, 9, top);
+            Text(kFontS, 88 - off + cycle, 9, top);
+            SetColor(false);
+            Box(0, 0, 19, 12);   // che phan tran sang vung WiFi
+            Box(88, 0, 40, 12);  // va vung pin
+            SetColor(true);
+        }
+    }
     for (int b = 0; b < 4; ++b) {
         int h = 2 + b * 2;
         if (b < v.wifi) {
@@ -606,43 +676,12 @@ void DrawChat(const ChatView& v) {
         Line(14, 3, 18, 9);
         Line(18, 3, 14, 9);
     }
-    const char* top = (v.notif != nullptr && v.notif[0]) ? v.notif : v.status;
-    if (top != nullptr && top[0]) {
-        int w = TextWidth(kFontS, top);
-        if (w <= 90) {
-            Text(kFontS, 19, 9, top);
-        } else {
-            int cycle = w + 24;
-            int off = static_cast<int>((v.t_ms / 40) % static_cast<uint32_t>(cycle));
-            // chi ve trong vung x 22..127
-            Text(kFontS, 108 - off, 9, top);
-            Text(kFontS, 108 - off + cycle, 9, top);
-            SetColor(false);
-            Box(0, 0, 19, 12);  // che phan tran sang vung WiFi
-            SetColor(true);
-            // ve lai WiFi sau khi che
-            for (int b = 0; b < 4; ++b) {
-                int h = 2 + b * 2;
-                if (b < v.wifi) {
-                    Box(1 + b * 3, 9 - h + 1, 2, h);
-                } else {
-                    Pix(1 + b * 3, 9);
-                    Pix(2 + b * 3, 9);
-                }
-            }
-        }
-    }
+    DrawBattery(127, 2, v.batt, true, v.t_ms);
 
     // ---- Giua: bieu cam + song am
     int emo = FaceFor(v.emotion != nullptr ? v.emotion : "");
     DrawFace(emo, 64, 30, v.t_ms, v.mode == kChatSpeaking);
     DrawWaves(64, 30, v.mode, v.t_ms);
-    if (v.mode == kChatListening) {  // bieu tuong mic goc phai tren
-        RoundBox(122, 1, 4, 6, 2);
-        Box(120, 5, 1, 2);
-        Box(127, 5, 1, 2);
-        Box(121, 8, 6, 1);
-    }
 
     // ---- Duoi: chu AI noi (2 dong, tu lat trang)
     const char* msg = v.msg != nullptr ? v.msg : "";
