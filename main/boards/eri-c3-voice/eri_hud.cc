@@ -503,6 +503,7 @@ static void HudTask(void*) {
 
 void Start() {
     LogHeap("hud start");
+    EriBattery::SetLoadMv(EriBattery::kLoadHudMv);
 
     // Dung LVGL: tu day ta ve thang len OLED bang bo dem rieng
     EriScreen::Begin();

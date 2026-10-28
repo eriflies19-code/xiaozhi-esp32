@@ -42,6 +42,7 @@ void EriChatDisplay::SetupUI() {
     OledDisplay::SetupUI();
     if (started_) return;
     started_ = true;
+    EriBattery::SetLoadMv(EriBattery::kLoadChatMv);
     EriScreen::Begin();  // dung LVGL, tu ve len panel
     xTaskCreate(TaskEntry, "eri_chat", 4096, this, 3, nullptr);
 }

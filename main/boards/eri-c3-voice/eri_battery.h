@@ -24,9 +24,26 @@ inline constexpr float kCalib = 1.0f;
 inline constexpr int kSamples = 32;
 inline constexpr int kPeriodMs = 2000;
 
+// Pin 300mAh co noi tro kha cao nen dien ap sut khi co tai. Bu lai theo che do de so % dong nhat:
+// dien ap dung de tinh % = dien ap do duoc + kLoad*Mv. Chinh cac so nay cho khop (xem log
+// "battery=...mV": so mV o menu so voi so mV o che do do, hieu so chinh la muc can bu).
+inline constexpr int kLoadMenuMv = 0;
+inline constexpr int kLoadRadioMv = 100;
+inline constexpr int kLoadChatMv = 100;
+inline constexpr int kLoadHudMv = 40;
+inline constexpr int kSettleMs = 20000;  // sau khi doi che do, giu nguyen so % cu trong luc dien ap on dinh
+
 inline std::atomic<int> g_mv{0};    // dien ap pin (mV), 0 = chua doc duoc
 inline std::atomic<int> g_pct{-1};  // 0..100, -1 = chua co so lieu
 inline bool g_started = false;
+inline std::atomic<int> g_load_mv{0};
+inline std::atomic<bool> g_load_changed{false};
+
+// Moi ung dung goi khi bat dau (Radio/Chat/HUD) de bao muc tai
+inline void SetLoadMv(int mv) {
+    g_load_mv = mv;
+    g_load_changed = true;
+}
 
 // Pin Li-ion/LiPo 1 cell: dien ap (mV) -> phan tram, noi suy tuyen tinh giua cac moc
 inline int PercentFromMv(int mv) {
@@ -75,6 +92,7 @@ inline void Task(void*) {
 
     float filtered = 0;
     int shown = -1;  // % dang hien thi (co tre de khong nhay +-1)
+    TickType_t settle_until = 0;
     int log_tick = 0;
     vTaskDelay(pdMS_TO_TICKS(300));
     while (true) {
@@ -94,19 +112,24 @@ inline void Task(void*) {
             if (cali == nullptr || adc_cali_raw_to_voltage(cali, raw, &pin_mv) != ESP_OK) {
                 pin_mv = raw * 3100 / 4095;  // gan dung neu khong co hieu chuan
             }
-            float bat = pin_mv * kDivider * kCalib;
+            if (g_load_changed.exchange(false)) {
+                filtered = 0;  // doc lai tu dau theo muc tai moi
+                settle_until = xTaskGetTickCount() + pdMS_TO_TICKS(kSettleMs);
+            }
+            float bat = pin_mv * kDivider * kCalib + g_load_mv.load();
             filtered = (filtered == 0) ? bat : filtered + (bat - filtered) / 8.0f;  // lam muot (~16 giay)
             int mv = static_cast<int>(filtered);
             g_mv = mv;
             int pct = PercentFromMv(mv);
             // Chi doi so hien thi khi lech >= 2%, tranh nhay +-1% do sut ap theo tai
-            if (shown < 0 || pct - shown >= 2 || shown - pct >= 2 || pct == 0 || pct == 100) {
+            bool settling = shown >= 0 && xTaskGetTickCount() < settle_until;
+            if (!settling && (shown < 0 || pct - shown >= 2 || shown - pct >= 2 || pct == 0 || pct == 100)) {
                 shown = pct;
             }
             g_pct = shown;
             if (log_tick++ % 15 == 0) {
-                ESP_LOGI("EriBattery", "raw=%d pin=%dmV battery=%dmV (%d%%)", raw, pin_mv, mv,
-                         g_pct.load());
+                ESP_LOGI("EriBattery", "raw=%d pin=%dmV battery=%dmV (+%dmV bu tai) -> %d%%", raw, pin_mv, mv,
+                         g_load_mv.load(), g_pct.load());
             }
         }
         vTaskDelay(pdMS_TO_TICKS(kPeriodMs));

@@ -17,6 +17,7 @@
 #include <driver/i2s_std.h>
 #include <esp_heap_caps.h>
 #include <esp_http_server.h>
+#include <esp_lcd_panel_ops.h>
 #include <esp_netif.h>
 #include <esp_log.h>
 #include <esp_system.h>
@@ -42,6 +43,8 @@
 
 #define TAG "EriRadio"
 
+extern esp_lcd_panel_handle_t g_eri_oled_panel;  // eri_c3_voice_board.cc
+
 namespace EriRadio {
 
 static constexpr size_t kStreamBufBytes = 32 * 1024;  // bo dem mang
@@ -55,10 +58,25 @@ static constexpr int kConnCancelled = -3;
 static constexpr int kSettleMs = 350;     // cho nguoi dung ngung bam nut roi moi ket noi
 static constexpr int kSaveDelayMs = 2000; // ghi NVS tre, tranh dung flash luc dang phat
 static constexpr int kRecvBytes = 2048;
+static constexpr uint32_t kScreenOffMs = 3 * 60 * 1000;  // tat man hinh sau 3 phut khong thao tac
 static constexpr int kMaxStations = 20;       // toi da trong danh sach luu tren NVS
 static constexpr size_t kMaxListBytes = 3800; // NVS: chuoi toi da ~4000 byte
 static constexpr size_t kMaxNameLen = 23;
 static constexpr size_t kMaxUrlLen = 159;
+
+// Tat man hinh sau kScreenOffMs khong thao tac; bam nut/web de bat lai
+static std::atomic<uint32_t> g_last_act_ms{0};
+static std::atomic<bool> g_asleep{false};
+static uint32_t NowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
+
+bool WakeIfAsleep() {
+    bool was = g_asleep.exchange(false);
+    g_last_act_ms = NowMs();
+    if (was && g_eri_oled_panel != nullptr) {
+        esp_lcd_panel_disp_on_off(g_eri_oled_panel, true);
+    }
+    return was;
+}
 
 static void SelectStation(int idx);
 static void StartWeb();
@@ -255,6 +273,17 @@ static void UiState(int phase, const char* msg) {
 
 static void UiTask(void*) {
     while (true) {
+        if (g_asleep.load()) {
+            vTaskDelay(pdMS_TO_TICKS(200));  // man hinh tat: khong ve, khong gui I2C
+            continue;
+        }
+        if (NowMs() - g_last_act_ms.load() > kScreenOffMs) {
+            g_asleep = true;
+            if (g_eri_oled_panel != nullptr) {
+                esp_lcd_panel_disp_on_off(g_eri_oled_panel, false);
+            }
+            continue;
+        }
         EriUi::RadioView v;
         int count = std::max(Count(), 1);
         int idx = std::clamp(g_station.load(), 0, count - 1);
@@ -1007,6 +1036,7 @@ static esp_err_t HState(httpd_req_t* req) {
 }
 
 static esp_err_t HPlay(httpd_req_t* req) {
+    WakeIfAsleep();
     int i = 0;
     if (!QueryInt(req, "i", &i) || i < 0 || i >= Count()) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad station");
@@ -1016,6 +1046,7 @@ static esp_err_t HPlay(httpd_req_t* req) {
 }
 
 static esp_err_t HVol(httpd_req_t* req) {
+    WakeIfAsleep();
     int v = 0;
     if (!QueryInt(req, "v", &v)) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad volume");
@@ -1036,6 +1067,7 @@ static esp_err_t HListGet(httpd_req_t* req) {
 }
 
 static esp_err_t HListPost(httpd_req_t* req) {
+    WakeIfAsleep();
     size_t len = req->content_len;
     if (len == 0 || len > 4096) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad size");
@@ -1083,6 +1115,7 @@ static esp_err_t HListPost(httpd_req_t* req) {
 }
 
 static esp_err_t HReset(httpd_req_t* req) {
+    WakeIfAsleep();
     {
         Settings settings("eri", true);
         settings.EraseKey("rlist");
@@ -1132,6 +1165,8 @@ static void StartWeb() {
 
 void Start() {
     LogHeap("radio start");
+    EriBattery::SetLoadMv(EriBattery::kLoadRadioMv);
+    g_last_act_ms = NowMs();
     EriScreen::Begin();  // dung LVGL, tu day ve bang EriGfx
     LoadList();
     {

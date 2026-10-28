@@ -128,7 +128,9 @@ bool HandleChatClick() {
             g_confirm = true;
             return true;
         case Mode::kRadio:
-            EriRadio::NextStation();
+            if (!EriRadio::WakeIfAsleep()) {  // man hinh dang tat: chi bat lai
+                EriRadio::NextStation();
+            }
             return true;
         case Mode::kHud:
             EriHud::ToggleMute();
@@ -158,7 +160,9 @@ bool HandleVolumeClick() {
             g_sel = (g_sel.load() + 1) % kModeCount;
             return true;
         case Mode::kRadio:
-            EriRadio::VolumeStep(+10);
+            if (!EriRadio::WakeIfAsleep()) {
+                EriRadio::VolumeStep(+10);
+            }
             return true;
         case Mode::kHud:
             EriHud::ToggleDemo();
@@ -174,7 +178,9 @@ bool HandleVolumeLongPress() {
         case Mode::kMenu:
             return true;
         case Mode::kRadio:
-            EriRadio::VolumeStep(-10);
+            if (!EriRadio::WakeIfAsleep()) {
+                EriRadio::VolumeStep(-10);
+            }
             return true;
         case Mode::kHud:
             return true;
