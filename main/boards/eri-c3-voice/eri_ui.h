@@ -9,7 +9,8 @@ namespace EriUi {
 
 // ---- Menu chon che do. sel: 0 Chat AI, 1 Radio, 2 WAZE HUD.
 // ms_total = 0: dang cho (khong dem nguoc); nguoc lai ve thanh dem nguoc.
-void DrawMenu(int sel, int ms_left, int ms_total, int batt = -1);  // batt: 0..100, -1 = an
+void DrawMenu(int sel, int ms_left, int ms_total, int batt = -1,
+              const char* clock = nullptr);  // batt: 0..100, -1 = an; clock: chuoi gio, nullptr = an
 
 // ---- Radio
 enum RadioPhase { kRadioConnecting = 0, kRadioBuffering, kRadioPlaying, kRadioError };

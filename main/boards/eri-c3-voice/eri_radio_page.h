@@ -53,5 +53,6 @@ async function poll(){try{
  $('n').textContent=s.n;$('t').textContent=s.t;$('m').textContent=(s.m||s.p)+(s.b>=0?' \u00b7 Battery '+s.b+'% ('+(s.mv/1000).toFixed(2)+'V)':'');
  if(document.activeElement!==$('v')){$('v').value=s.v;$('vv').textContent=s.v}
  [...$('l').children].forEach((d,k)=>d.classList.toggle('on',k==s.i))}catch(e){}}
+q('/api/time?t='+Math.floor(Date.now()/1000-new Date().getTimezoneOffset()*60),{method:'POST'});
 load();poll();setInterval(poll,2000);
 </script></body></html>)HTML";

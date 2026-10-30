@@ -6,6 +6,7 @@
 #include "config.h"
 #include "eri_mp3.h"
 #include "eri_battery.h"
+#include "eri_clock.h"
 #include "eri_radio_page.h"
 #include "eri_stations.h"
 #include "settings.h"
@@ -47,8 +48,8 @@ extern esp_lcd_panel_handle_t g_eri_oled_panel;  // eri_c3_voice_board.cc
 
 namespace EriRadio {
 
-static constexpr size_t kStreamBufBytes = 32 * 1024;  // bo dem mang
-static constexpr size_t kPrebufferBytes = 12 * 1024;  // dem truoc khi phat
+static constexpr size_t kStreamBufBytes = 24 * 1024;  // bo dem mang 32
+static constexpr size_t kPrebufferBytes = 16 * 1024;  // dem truoc khi phat 12
 static constexpr int kInBufBytes = 3072;              // du chua 1 khung MP3 (toi da ~1441 byte)
 static constexpr int kPcmBytes = 1152 * 2 * 2;        // 1 khung MP3 stereo 16-bit
 static constexpr int kConnReadTimeoutMs = 1000;
@@ -58,6 +59,8 @@ static constexpr int kConnCancelled = -3;
 static constexpr int kSettleMs = 350;     // cho nguoi dung ngung bam nut roi moi ket noi
 static constexpr int kSaveDelayMs = 2000; // ghi NVS tre, tranh dung flash luc dang phat
 static constexpr int kRecvBytes = 2048;
+// true: WiFi ngu nhe giua cac goi (tiet kiem pin). Neu nhac bi giat thi doi thanh false.
+static constexpr bool kWifiPowerSave = true;
 static constexpr uint32_t kScreenOffMs = 3 * 60 * 1000;  // tat man hinh sau 3 phut khong thao tac
 static constexpr int kMaxStations = 20;       // toi da trong danh sach luu tren NVS
 static constexpr size_t kMaxListBytes = 3800; // NVS: chuoi toi da ~4000 byte
@@ -377,13 +380,15 @@ static bool EnsureWifi() {
     while (!wifi.IsConnected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_err_t ps_err = esp_wifi_set_ps(kWifiPowerSave ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
     if (ps_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to disable Wi-Fi power save: %s", esp_err_to_name(ps_err));
+        ESP_LOGE(TAG, "Failed to set Wi-Fi power save: %s", esp_err_to_name(ps_err));
         UiState(EriUi::kRadioConnecting, "WiFi sleep failed");
     } else {
-        ESP_LOGI(TAG, "Wi-Fi power save disabled for radio playback");
+        ESP_LOGI(TAG, "Wi-Fi power save: %s", kWifiPowerSave ? "MIN_MODEM" : "off");
     }
+    EriClock::Init();
+    EriClock::StartSntp();
     return true;
 }
 
@@ -1114,6 +1119,15 @@ static esp_err_t HListPost(httpd_req_t* req) {
     return httpd_resp_sendstr(req, "ok");
 }
 
+// Trinh duyet gui gio hien tai (giay) de dat dong ho khi chua co gio tu mang
+static esp_err_t HTime(httpd_req_t* req) {
+    int t = 0;
+    if (QueryInt(req, "t", &t) && t > 1735689600 && !EriClock::Valid()) {
+        EriClock::SetEpoch(t);
+    }
+    return httpd_resp_sendstr(req, "ok");
+}
+
 static esp_err_t HReset(httpd_req_t* req) {
     WakeIfAsleep();
     {
@@ -1143,7 +1157,7 @@ static void StartWeb() {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 6144;
     cfg.max_open_sockets = 3;  // chua socket cho luong nhac
-    cfg.max_uri_handlers = 8;
+    cfg.max_uri_handlers = 12;
     cfg.lru_purge_enable = true;
     cfg.task_priority = 3;  // thap hon task phat/mang
     httpd_handle_t srv = nullptr;
@@ -1158,6 +1172,7 @@ static void StartWeb() {
     AddUri(srv, "/api/play", HTTP_POST, HPlay);
     AddUri(srv, "/api/vol", HTTP_POST, HVol);
     AddUri(srv, "/api/reset", HTTP_POST, HReset);
+    AddUri(srv, "/api/time", HTTP_POST, HTime);
     ESP_LOGI(TAG, "Web control at http://%s/", g_ip);
 }
 

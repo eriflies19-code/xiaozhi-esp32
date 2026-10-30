@@ -1,5 +1,6 @@
 #include "eri_mode.h"
 #include "eri_battery.h"
+#include "eri_clock.h"
 #include "eri_gfx.h"
 #include "eri_hud.h"
 #include "eri_screen.h"
@@ -64,6 +65,7 @@ bool Run() {
     ESP_LOGI(TAG, "Menu started, last mode=%d", last);
 
     EriScreen::Begin();  // dung LVGL, menu ve bang EriGfx
+    EriClock::Init();
 
     const int total_ms = kMenuSeconds * 1000;
     uint32_t t0 = NowMs();
@@ -80,7 +82,9 @@ bool Run() {
                 break;  // het gio: dung che do lan truoc
             }
         }
-        EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0, EriBattery::Percent());
+        char clk[64];
+        EriClock::Format(clk, sizeof(clk));
+        EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0, EriBattery::Percent(), clk);
         EriScreen::Present();
     }
 

@@ -18,6 +18,7 @@
 
 // Tay cam man hinh OLED, de che do WAZE HUD ve thang len man hinh (eri_hud.cc)
 esp_lcd_panel_handle_t g_eri_oled_panel = nullptr;
+esp_lcd_panel_io_handle_t g_eri_oled_io = nullptr;  // de chinh do tuong phan (eri_screen.cc)
 
 class EriC3Voice : public WifiBoard {
 private:
@@ -62,6 +63,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
         g_eri_oled_panel = panel;
+        g_eri_oled_io = panel_io;
 
         display_ = new EriChatDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                       DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);

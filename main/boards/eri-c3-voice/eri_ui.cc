@@ -40,13 +40,19 @@ static void DrawBattery(int rx, int y, int pct, bool text, uint32_t t_ms) {
     }
 }
 
-void DrawMenu(int sel, int ms_left, int ms_total, int batt) {
+void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
     Clear();
     SetColor(true);
 
+    // Dong tren: dong ho (trai), pin (phai)
+    if (clock != nullptr && clock[0]) {
+        Text(kFontS, 2, 8, clock);
+    }
+    DrawBattery(127, 1, batt, true, 0);
+
     static const Bmp* const kIcons[3] = {&icChat, &icRadio, &icNav};
     static const char* const kNames[3] = {"CHAT AI", "RADIO", "WAZE"};
-    const int tw = 38, th = 44, gap = 4;
+    const int tw = 38, th = 36, gap = 4, ty = 11;
     const int x0 = (kW - (3 * tw + 2 * gap)) / 2;
 
     for (int i = 0; i < 3; ++i) {
@@ -54,13 +60,13 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt) {
         bool on = (i == sel);
         SetColor(true);
         if (on) {
-            RoundBox(x, 1, tw, th, 5);
+            RoundBox(x, ty, tw, th, 5);
         } else {
-            RoundFrame(x, 1, tw, th, 5);
+            RoundFrame(x, ty, tw, th, 5);
         }
         SetColor(!on);
-        Draw(*kIcons[i], x + (tw - kIcons[i]->w) / 2, 6);
-        TextC(kFontS, x + tw / 2, 40, kNames[i]);
+        Draw(*kIcons[i], x + (tw - kIcons[i]->w) / 2, ty + 3);
+        TextC(kFontS, x + tw / 2, ty + 33, kNames[i]);
     }
     SetColor(true);
 
@@ -68,11 +74,9 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt) {
         int w = 124 * std::max(ms_left, 0) / ms_total;
         Frame(2, 59, 124, 4);
         Box(2, 59, w, 4);
-        Text(kFontS, 2, 55, "10:next 4:select");
-        DrawBattery(127, 49, batt, true, 0);
+        TextC(kFontS, 64, 55, "10: next   4: select");
     } else {
-        Text(kFontS, 2, 58, "10:next 4:select");
-        DrawBattery(127, 52, batt, true, 0);
+        TextC(kFontS, 64, 58, "10: next    4: select");
     }
 }
 
