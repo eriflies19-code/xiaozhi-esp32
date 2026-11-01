@@ -50,7 +50,7 @@ $('v').oninput=e=>{$('vv').textContent=e.target.value;clearTimeout(vt);
  vt=setTimeout(()=>q('/api/vol?v='+e.target.value,{method:'POST'}),150)};
 async function poll(){try{
  const s=JSON.parse(await q('/api/state'));
- $('n').textContent=s.n;$('t').textContent=s.t;$('m').textContent=(s.m||s.p)+(s.b>=0?' \u00b7 Battery '+s.b+'% ('+(s.mv/1000).toFixed(2)+'V)':'');
+ $('n').textContent=s.n;$('t').textContent=s.t;$('m').textContent=(s.m||s.p)+' \u00b7 Dropouts '+s.u+(s.b>=0?' \u00b7 Battery '+s.b+'% ('+(s.mv/1000).toFixed(2)+'V)':'');
  if(document.activeElement!==$('v')){$('v').value=s.v;$('vv').textContent=s.v}
  [...$('l').children].forEach((d,k)=>d.classList.toggle('on',k==s.i))}catch(e){}}
 q('/api/time?t='+Math.floor(Date.now()/1000-new Date().getTimezoneOffset()*60),{method:'POST'});

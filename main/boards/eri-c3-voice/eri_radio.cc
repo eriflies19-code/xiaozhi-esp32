@@ -6,6 +6,7 @@
 #include "config.h"
 #include "eri_mp3.h"
 #include "eri_battery.h"
+#include "eri_prefs.h"
 #include "eri_clock.h"
 #include "eri_radio_page.h"
 #include "eri_stations.h"
@@ -48,8 +49,8 @@ extern esp_lcd_panel_handle_t g_eri_oled_panel;  // eri_c3_voice_board.cc
 
 namespace EriRadio {
 
-static constexpr size_t kStreamBufBytes = 24 * 1024;  // bo dem mang 32
-static constexpr size_t kPrebufferBytes = 16 * 1024;  // dem truoc khi phat 12
+static constexpr size_t kStreamBufBytes = 32 * 1024;  // bo dem mang
+static constexpr size_t kPrebufferBytes = 12 * 1024;  // dem truoc khi phat
 static constexpr int kInBufBytes = 3072;              // du chua 1 khung MP3 (toi da ~1441 byte)
 static constexpr int kPcmBytes = 1152 * 2 * 2;        // 1 khung MP3 stereo 16-bit
 static constexpr int kConnReadTimeoutMs = 1000;
@@ -60,8 +61,6 @@ static constexpr int kSettleMs = 350;     // cho nguoi dung ngung bam nut roi mo
 static constexpr int kSaveDelayMs = 2000; // ghi NVS tre, tranh dung flash luc dang phat
 static constexpr int kRecvBytes = 2048;
 // true: WiFi ngu nhe giua cac goi (tiet kiem pin). Neu nhac bi giat thi doi thanh false.
-static constexpr bool kWifiPowerSave = true;
-static constexpr uint32_t kScreenOffMs = 3 * 60 * 1000;  // tat man hinh sau 3 phut khong thao tac
 static constexpr int kMaxStations = 20;       // toi da trong danh sach luu tren NVS
 static constexpr size_t kMaxListBytes = 3800; // NVS: chuoi toi da ~4000 byte
 static constexpr size_t kMaxNameLen = 23;
@@ -213,6 +212,7 @@ static void CopyName(int idx, char* out, size_t cap) {
 // Ten bai dang phat (ICY StreamTitle), da doi sang ASCII
 static std::mutex g_title_mu;
 static char g_title[96] = "";
+static std::atomic<int> g_underruns{0};  // so lan het du lieu khi dang phat (nghe bi giat)
 static char g_ip[16] = "";
 
 static void SetTitle(const char* t) {
@@ -274,20 +274,38 @@ static void UiState(int phase, const char* msg) {
     g_phase = phase;
 }
 
+// Muc song WiFi 0..4 (0 = chua ket noi)
+static int WifiLevel() {
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return 0;
+    }
+    int r = ap.rssi;
+    return r > -55 ? 4 : r > -65 ? 3 : r > -75 ? 2 : 1;
+}
+
 static void UiTask(void*) {
+    int wifi = 0;
+    int wifi_tick = 0;
     while (true) {
         if (g_asleep.load()) {
             vTaskDelay(pdMS_TO_TICKS(200));  // man hinh tat: khong ve, khong gui I2C
             continue;
         }
-        if (NowMs() - g_last_act_ms.load() > kScreenOffMs) {
+        uint32_t off_ms = EriPrefs::ScreenOffMs();
+        if (off_ms != 0 && NowMs() - g_last_act_ms.load() > off_ms) {
             g_asleep = true;
             if (g_eri_oled_panel != nullptr) {
                 esp_lcd_panel_disp_on_off(g_eri_oled_panel, false);
             }
             continue;
         }
+        if (wifi_tick-- <= 0) {
+            wifi = WifiLevel();
+            wifi_tick = 25;  // ~2 giay
+        }
         EriUi::RadioView v;
+        v.wifi = wifi;
         int count = std::max(Count(), 1);
         int idx = std::clamp(g_station.load(), 0, count - 1);
         char name[40], title[96];
@@ -380,12 +398,12 @@ static bool EnsureWifi() {
     while (!wifi.IsConnected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    esp_err_t ps_err = esp_wifi_set_ps(kWifiPowerSave ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
+    esp_err_t ps_err = esp_wifi_set_ps(EriPrefs::WifiPowerSave() ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
     if (ps_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set Wi-Fi power save: %s", esp_err_to_name(ps_err));
         UiState(EriUi::kRadioConnecting, "WiFi sleep failed");
     } else {
-        ESP_LOGI(TAG, "Wi-Fi power save: %s", kWifiPowerSave ? "MIN_MODEM" : "off");
+        ESP_LOGI(TAG, "Wi-Fi power save: %s", EriPrefs::WifiPowerSave() ? "MIN_MODEM" : "off");
     }
     EriClock::Init();
     EriClock::StartSntp();
@@ -915,6 +933,7 @@ static void PlayTask(void*) {
     int in_len = 0;
     uint32_t my_gen = 0;
     bool prebuffering = true;
+    bool was_empty = true;
     TickType_t prebuffer_start = xTaskGetTickCount();
     TickType_t heap_log_tick = prebuffer_start;
 
@@ -939,6 +958,7 @@ static void PlayTask(void*) {
         }
 
         if (prebuffering) {
+            was_empty = true;  // dang nap truoc: khong tinh la giat
             if (xStreamBufferBytesAvailable(g_stream) >= kPrebufferBytes ||
                 (xTaskGetTickCount() - prebuffer_start) > pdMS_TO_TICKS(6000)) {
                 prebuffering = false;
@@ -954,8 +974,19 @@ static void PlayTask(void*) {
         size_t got = xStreamBufferReceive(g_stream, in + in_len, kInBufBytes - in_len,
                                           pdMS_TO_TICKS(50));
         in_len += static_cast<int>(got);
+        if (in_len > 0) {
+            was_empty = false;
+            if (g_phase.load() == EriUi::kRadioBuffering) {
+                UiState(EriUi::kRadioPlaying, "");  // co tieng roi: het "Buffering"
+            }
+        }
         if (in_len == 0) {
             WriteSilence();  // het du lieu: phat im lang thay vi lap tieng
+            if (!was_empty) {
+                was_empty = true;
+                int n = ++g_underruns;
+                ESP_LOGW(TAG, "Underrun #%d (het du lieu, mang cham?)", n);
+            }
             continue;
         }
 
@@ -1035,7 +1066,8 @@ static esp_err_t HState(httpd_req_t* req) {
     j += p;
     j += "\",\"m\":\"";
     JsonEsc(g_msg, j);
-    j += "\",\"b\":" + std::to_string(EriBattery::Percent()) + ",\"mv\":" + std::to_string(EriBattery::Millivolts()) + "}";
+    j += "\",\"b\":" + std::to_string(EriBattery::Percent()) + ",\"mv\":" + std::to_string(EriBattery::Millivolts()) +
+         ",\"u\":" + std::to_string(g_underruns.load()) + "}";
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, j.c_str(), HTTPD_RESP_USE_STRLEN);
 }
@@ -1218,6 +1250,7 @@ static void SelectStation(int idx) {
     g_gen++;
     ScheduleSave();
     g_level = 0;
+    g_underruns = 0;
     SetTitle("");
     UiState(EriUi::kRadioConnecting, "");
 }

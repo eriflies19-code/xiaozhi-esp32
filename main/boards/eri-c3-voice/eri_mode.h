@@ -5,7 +5,7 @@
 
 namespace EriMode {
 
-enum class Mode { kMenu, kChat, kRadio, kHud };
+enum class Mode { kMenu, kChat, kRadio, kHud, kSettings };
 
 // Hien menu (5 giay). Tra ve true neu da chon Radio/WAZE HUD va che do do dang chay
 // trong cac task rieng -> app_main nen return, KHONG khoi dong Application.

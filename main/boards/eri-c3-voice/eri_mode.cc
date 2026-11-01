@@ -6,12 +6,19 @@
 #include "eri_screen.h"
 #include "eri_ui.h"
 #include "eri_radio.h"
+#include "eri_prefs.h"
 
 #include "board.h"
 #include "display.h"
 #include "settings.h"
 
 #include <esp_log.h>
+#include <esp_netif.h>
+#if __has_include(<esp_app_desc.h>)
+#include <esp_app_desc.h>
+#else
+#include <esp_ota_ops.h>
+#endif
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -24,12 +31,14 @@
 namespace EriMode {
 
 static constexpr int kMenuSeconds = 5;
-static constexpr int kModeCount = 3;  // 0 = Chat AI, 1 = Radio, 2 = WAZE HUD
+static constexpr int kModeCount = 4;  // 0 = Chat AI, 1 = Radio, 2 = WAZE HUD, 3 = Settings
 
 static std::atomic<int> g_mode{static_cast<int>(Mode::kChat)};
 static std::atomic<int> g_sel{0};          // 0 = Chat AI, 1 = Radio, 2 = WAZE HUD
 static std::atomic<bool> g_touched{false}; // da bam nut -> tat dem nguoc
 static std::atomic<bool> g_confirm{false};
+static std::atomic<bool> g_set_next{false};    // GPIO4 trong Settings: sang muc ke tiep
+static std::atomic<bool> g_set_change{false};  // GPIO10 trong Settings: doi gia tri muc dang chon
 static std::atomic<uint32_t> g_menu_start_ms{0};  // bo qua nut bam luc moi vao menu
 
 static uint32_t NowMs() { return static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS); }
@@ -57,7 +66,7 @@ bool Run() {
             settings.SetInt("stay", 0);
         }
     }
-    g_sel = (last >= 0 && last < kModeCount) ? last : 0;
+    g_sel = (last >= 0 && last < kModeCount - 1) ? last : 0;  // Settings khong phai che do "lan truoc"
     g_touched = false;
     g_confirm = false;
     g_menu_start_ms = NowMs();
@@ -70,22 +79,78 @@ bool Run() {
     const int total_ms = kMenuSeconds * 1000;
     uint32_t t0 = NowMs();
     bool counting = !stay;
-    while (!g_confirm) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-        if (g_touched) {
-            counting = false;  // da bam nut: cho xac nhan, khong tu vao nua
-        }
-        int left = 0;
-        if (counting) {
-            left = total_ms - static_cast<int>(NowMs() - t0);
-            if (left <= 0) {
-                break;  // het gio: dung che do lan truoc
+    while (true) {
+        while (!g_confirm) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            if (g_touched) {
+                counting = false;  // da bam nut: cho xac nhan, khong tu vao nua
             }
+            int left = 0;
+            if (counting) {
+                left = total_ms - static_cast<int>(NowMs() - t0);
+                if (left <= 0) {
+                    break;  // het gio: dung che do lan truoc
+                }
+            }
+            char clk[64];
+            EriClock::Format(clk, sizeof(clk));
+            EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0, EriBattery::Percent(), clk);
+            EriScreen::Present();
         }
-        char clk[64];
-        EriClock::Format(clk, sizeof(clk));
-        EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0, EriBattery::Percent(), clk);
-        EriScreen::Present();
+        if (g_sel != 3) {
+            break;
+        }
+        // Settings: GPIO10 doi gia tri (xem ngay), GPIO4 sang muc ke tiep, het muc cuoi thi luu va ve menu
+        g_set_next = false;
+        g_set_change = false;
+        g_mode = static_cast<int>(Mode::kSettings);
+        g_menu_start_ms = NowMs();
+        int item = 0;
+        const char* ver = "?";
+        if (const esp_app_desc_t* d = esp_app_get_description()) {
+            ver = d->version;
+        }
+        while (item < 4) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            if (g_set_change.exchange(false)) {
+                if (item == 0) {
+                    EriScreen::SetBrightLevel((EriScreen::BrightLevel() + 1) % EriScreen::kBrightLevels);
+                } else if (item == 1) {
+                    EriPrefs::NextScreenOff();
+                } else if (item == 2) {
+                    EriPrefs::ToggleWifiPowerSave();
+                }
+            }
+            if (g_set_next.exchange(false)) {
+                ++item;
+                continue;
+            }
+            char ip[20] = "";
+            esp_netif_ip_info_t info = {};
+            esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            if (item == 3 && nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
+                esp_ip4addr_ntoa(&info.ip, ip, sizeof(ip));
+            }
+            EriUi::SettingsView v;
+            v.item = item;
+            v.bright = EriScreen::BrightLevel();
+            v.bright_levels = EriScreen::kBrightLevels;
+            v.soff = EriPrefs::ScreenOffLabel(EriPrefs::ScreenOffIndex());
+            v.wifi_save = EriPrefs::WifiPowerSave();
+            v.version = ver;
+            v.mv = EriBattery::Millivolts();
+            v.ip = ip;
+            v.batt = EriBattery::Percent();
+            EriUi::DrawSettings(v);
+            EriScreen::Present();
+        }
+        EriScreen::SaveBrightLevel();
+        EriPrefs::Save();
+        g_mode = static_cast<int>(Mode::kMenu);
+        g_menu_start_ms = NowMs();
+        g_touched = true;
+        g_confirm = false;
+        counting = false;
     }
 
     int sel = g_sel;
@@ -139,6 +204,11 @@ bool HandleChatClick() {
         case Mode::kHud:
             EriHud::ToggleMute();
             return true;
+        case Mode::kSettings:
+            if (!MenuSettling()) {
+                g_set_next = true;
+            }
+            return true;
         default:
             return false;  // Chat AI: de board xu ly nhu cu
     }
@@ -146,7 +216,7 @@ bool HandleChatClick() {
 
 bool HandleChatLongPress() {
     ESP_LOGI(TAG, "HandleChatLongPress mode=%d", (int)Current());
-    if (Current() == Mode::kMenu) {
+    if (Current() == Mode::kMenu || Current() == Mode::kSettings) {
         return true;
     }
     RestartToMenu();
@@ -171,6 +241,11 @@ bool HandleVolumeClick() {
         case Mode::kHud:
             EriHud::ToggleDemo();
             return true;
+        case Mode::kSettings:
+            if (!MenuSettling()) {
+                g_set_change = true;
+            }
+            return true;
         default:
             return false;
     }
@@ -180,6 +255,7 @@ bool HandleVolumeLongPress() {
     ESP_LOGI(TAG, "HandleVolumeLongPress mode=%d", (int)Current());
     switch (Current()) {
         case Mode::kMenu:
+        case Mode::kSettings:
             return true;
         case Mode::kRadio:
             if (!EriRadio::WakeIfAsleep()) {

@@ -7,10 +7,23 @@
 
 namespace EriUi {
 
-// ---- Menu chon che do. sel: 0 Chat AI, 1 Radio, 2 WAZE HUD.
+// ---- Menu chon che do. sel: 0 Chat AI, 1 Radio, 2 WAZE HUD, 3 Settings.
 // ms_total = 0: dang cho (khong dem nguoc); nguoc lai ve thanh dem nguoc.
 void DrawMenu(int sel, int ms_left, int ms_total, int batt = -1,
               const char* clock = nullptr);  // batt: 0..100, -1 = an; clock: chuoi gio, nullptr = an
+
+// ---- Man hinh Settings. item: 0 do sang, 1 tat man hinh Radio, 2 WiFi save, 3 trang thong tin
+struct SettingsView {
+    int item = 0;
+    int bright = 0, bright_levels = 5;
+    const char* soff = "";   // vd "3 min"
+    bool wifi_save = false;
+    const char* version = "";
+    int mv = 0;              // dien ap pin (mV)
+    const char* ip = "";     // rong = chua ket noi
+    int batt = -1;
+};
+void DrawSettings(const SettingsView& v);
 
 // ---- Radio
 enum RadioPhase { kRadioConnecting = 0, kRadioBuffering, kRadioPlaying, kRadioError };
@@ -25,6 +38,7 @@ struct RadioView {
     const char* title = "";  // ten bai dang phat (ICY), "" = chua co
     const char* ip = "";     // dia chi web control, "" = chua co
     int batt = -1;           // muc pin 0..100, -1 = khong hien
+    int wifi = -1;           // 0 = mat WiFi, 1..4 = vach song, -1 = khong hien
     uint32_t t_ms = 0;
 };
 void DrawRadio(const RadioView& v);

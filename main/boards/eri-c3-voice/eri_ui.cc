@@ -40,6 +40,40 @@ static void DrawBattery(int rx, int y, int pct, bool text, uint32_t t_ms) {
     }
 }
 
+// Bieu tuong song WiFi 4 vach (rong 10px, cao toi da 8px, day o y+... = baseline). level 0 = mat ket noi.
+static void DrawWifi(int x, int baseline, int level) {
+    if (level < 0) {
+        return;
+    }
+    for (int b = 0; b < 4; ++b) {
+        int h = 2 + b * 2;
+        if (b < level) {
+            Box(x + b * 3, baseline - h + 1, 2, h);
+        } else {
+            Pix(x + b * 3, baseline);
+            Pix(x + b * 3 + 1, baseline);
+        }
+    }
+    if (level == 0) {
+        Line(x + 12, baseline - 6, x + 16, baseline);  // dau X: mat ket noi
+        Line(x + 16, baseline - 6, x + 12, baseline);
+    }
+}
+
+// Banh rang (cai dat): than tron + 8 rang + lo giua. fg = mau dang ve
+static void DrawGear(int cx, int cy, bool inverted) {
+    (void)inverted;
+    static const int8_t kDir[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+    for (int i = 0; i < 8; ++i) {
+        int dx = kDir[i][0], dy = kDir[i][1];
+        int d = (dx != 0 && dy != 0) ? 6 : 9;  // rang cheo nam gan hon cho tron
+        int px = cx + dx * d, py = cy + dy * d;
+        Box(px - 2, py - 2, 5, 5);  // rang
+    }
+    Ring(cx, cy, 8, 4);  // than
+    // lo giua giu nguyen nen (xoa mau nguoc)
+}
+
 void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
     Clear();
     SetColor(true);
@@ -51,11 +85,11 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
     DrawBattery(127, 1, batt, true, 0);
 
     static const Bmp* const kIcons[3] = {&icChat, &icRadio, &icNav};
-    static const char* const kNames[3] = {"CHAT AI", "RADIO", "WAZE"};
-    const int tw = 38, th = 36, gap = 4, ty = 11;
-    const int x0 = (kW - (3 * tw + 2 * gap)) / 2;
+    static const char* const kNames[4] = {"CHAT", "RADIO", "WAZE", "SET"};
+    const int tw = 29, th = 36, gap = 3, ty = 11;
+    const int x0 = (kW - (4 * tw + 3 * gap)) / 2;
 
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
         int x = x0 + i * (tw + gap);
         bool on = (i == sel);
         SetColor(true);
@@ -65,7 +99,11 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
             RoundFrame(x, ty, tw, th, 5);
         }
         SetColor(!on);
-        Draw(*kIcons[i], x + (tw - kIcons[i]->w) / 2, ty + 3);
+        if (i < 3) {
+            Draw(*kIcons[i], x + (tw - kIcons[i]->w) / 2, ty + 3);
+        } else {
+            DrawGear(x + tw / 2, ty + 15, on);
+        }
         TextC(kFontS, x + tw / 2, ty + 33, kNames[i]);
     }
     SetColor(true);
@@ -78,6 +116,59 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
     } else {
         TextC(kFontS, 64, 58, "10: next    4: select");
     }
+}
+
+
+// ================================================================ Settings
+
+void DrawSettings(const SettingsView& v) {
+    Clear();
+    SetColor(true);
+    Text(kFontS, 2, 8, v.item == 3 ? "INFO" : "Settings");
+    DrawBattery(127, 1, v.batt, true, 0);
+
+    if (v.item == 3) {
+        char b[48];
+        Text(kFontS, 2, 24, "Firmware");
+        TextR(kFontS, 126, 24, v.version);
+        Text(kFontS, 2, 35, "Battery");
+        snprintf(b, sizeof(b), "%d.%02d V", v.mv / 1000, (v.mv % 1000) / 10);
+        TextR(kFontS, 126, 35, v.mv > 0 ? b : "-");
+        Text(kFontS, 2, 46, "Web IP");
+        TextR(kFontS, 126, 46, v.ip[0] ? v.ip : "open Radio");
+        TextC(kFontS, 64, 62, "4: back to menu");
+        return;
+    }
+
+    static const char* const kLabels[3] = {"Brightness", "Radio screen off", "WiFi power save"};
+    for (int i = 0; i < 3; ++i) {
+        int base = 23 + i * 12;
+        bool on = (i == v.item);
+        if (on) {
+            RoundBox(1, base - 9, 126, 11, 2);
+            SetColor(false);
+        }
+        Text(kFontS, 4, base, kLabels[i]);
+        if (i == 0) {
+            // 5 vach cao dan; vach <= muc hien tai dac
+            int n = v.bright_levels;
+            for (int k = 0; k < n; ++k) {
+                int h = 2 + k * 2 / 1;
+                int x = 126 - (n - k) * 5;
+                if (k <= v.bright) {
+                    Box(x, base + 1 - h, 3, h);
+                } else {
+                    Box(x, base, 3, 1);
+                }
+            }
+        } else if (i == 1) {
+            TextR(kFontS, 124, base, v.soff);
+        } else {
+            TextR(kFontS, 124, base, v.wifi_save ? "On" : "Off");
+        }
+        SetColor(true);
+    }
+    TextC(kFontS, 64, 62, "10: change   4: next");
 }
 
 // ================================================================ Radio
@@ -127,6 +218,7 @@ void DrawRadio(const RadioView& v) {
     snprintf(idx, sizeof(idx), "%d/%d", v.index + 1, v.count);
     TextR(kFontS, 126, 9, idx);
     DrawBattery(96, 2, v.batt, true, v.t_ms);
+    DrawWifi(46, 9, v.wifi);
 
     // Ten dai
     Marquee(v.name, 27, v.t_ms);

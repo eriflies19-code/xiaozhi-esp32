@@ -7,6 +7,7 @@
 #include "config.h"
 #include "eri_battery.h"
 #include "eri_mode.h"
+#include "eri_screen.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_ops.h>
@@ -113,6 +114,7 @@ public:
         : chat_button_(CHAT_BUTTON_GPIO, false, 2000), volume_button_(VOLUME_BUTTON_GPIO) {
         InitializeDisplayI2c();
         InitializeSsd1306Display();
+        EriScreen::ApplyBrightness();  // do sang da luu (Settings)
         InitializeButtons();
         EriBattery::Start();  // doc pin qua cau chia ap tren GPIO0
     }
