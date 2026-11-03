@@ -2,9 +2,11 @@
 
 #include "application.h"
 #include "eri_battery.h"
+#include "eri_wifi_level.h"
 #include "eri_screen.h"
 #include "eri_ui.h"
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
@@ -30,12 +32,7 @@ void Fold(const char* in, std::string& out, size_t cap) {
     if (out.size() > cap) out.resize(cap);
 }
 
-int WifiLevel() {
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return 0;
-    int r = ap.rssi;
-    return r > -55 ? 4 : r > -65 ? 3 : r > -75 ? 2 : 1;
-}
+int WifiLevel() { return EriWifi::Level(); }
 }  // namespace
 
 void EriChatDisplay::SetupUI() {
@@ -47,12 +44,22 @@ void EriChatDisplay::SetupUI() {
     xTaskCreate(TaskEntry, "eri_chat", 4096, this, 3, nullptr);
 }
 
+// Ghi log RAM moi khi doi trang thai / co thong bao, de biet luc nao bi het bo nho
+static void LogHeapAt(const char* what, const char* text) {
+    ESP_LOGI("EriChat", "Heap @%s '%s': free=%u min=%u largest=%u", what, text ? text : "",
+             static_cast<unsigned>(esp_get_free_heap_size()),
+             static_cast<unsigned>(esp_get_minimum_free_heap_size()),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+}
+
 void EriChatDisplay::SetStatus(const char* status) {
+    LogHeapAt("status", status);
     std::lock_guard<std::mutex> l(g_mu);
     Fold(status, g_status, 40);
 }
 
 void EriChatDisplay::ShowNotification(const char* n, int duration_ms) {
+    LogHeapAt("notify", n);
     std::lock_guard<std::mutex> l(g_mu);
     Fold(n, g_notif, 40);
     g_notif_until_us = esp_timer_get_time() + static_cast<int64_t>(duration_ms) * 1000;

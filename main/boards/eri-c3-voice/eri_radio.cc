@@ -6,6 +6,7 @@
 #include "config.h"
 #include "eri_mp3.h"
 #include "eri_battery.h"
+#include "eri_wifi_level.h"
 #include "eri_prefs.h"
 #include "eri_clock.h"
 #include "eri_radio_page.h"
@@ -275,14 +276,7 @@ static void UiState(int phase, const char* msg) {
 }
 
 // Muc song WiFi 0..4 (0 = chua ket noi)
-static int WifiLevel() {
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
-        return 0;
-    }
-    int r = ap.rssi;
-    return r > -55 ? 4 : r > -65 ? 3 : r > -75 ? 2 : 1;
-}
+static int WifiLevel() { return EriWifi::Level(); }
 
 static void UiTask(void*) {
     int wifi = 0;

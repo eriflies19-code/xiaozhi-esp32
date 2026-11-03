@@ -15,6 +15,36 @@ namespace EriUi {
 
 // ================================================================ Menu
 
+// Mui ten chi nut: nut tren (GPIO10) = tam giac huong len, nut duoi (GPIO4) = tam giac huong xuong.
+// Hai nut duoc dat nut tren, nut duoi tren thiet bi. Rong 7px, cao 5px, day/dinh tinh theo baseline.
+static void TriUp(int x, int baseline) { Tri(x + 3, baseline - 5, x, baseline, x + 6, baseline); }
+static void TriDown(int x, int baseline) { Tri(x, baseline - 5, x + 6, baseline - 5, x + 3, baseline); }
+
+// Dong goi y: "^ up   v down". Truyen nullptr de bo 1 ben. Canh giua man hinh.
+static void Hints(int baseline, const char* up, const char* down) {
+    int wu = up ? 9 + TextWidth(kFontS, up) : 0;
+    int wd = down ? 9 + TextWidth(kFontS, down) : 0;
+    int gap = (up && down) ? 10 : 0;
+    int x = (kW - (wu + gap + wd)) / 2;
+    if (up) {
+        TriUp(x, baseline);
+        Text(kFontS, x + 9, baseline, up);
+        x += wu + gap;
+    }
+    if (down) {
+        TriDown(x, baseline);
+        Text(kFontS, x + 9, baseline, down);
+    }
+}
+
+// Chuong nho 7x8 (bao thuc)
+static void DrawBell(int cx, int y) {
+    Tri(cx, y, cx - 3, y + 5, cx + 3, y + 5);
+    Box(cx - 3, y + 5, 7, 1);
+    Pix(cx, y + 7);
+    Pix(cx, y);
+}
+
 // Bieu tuong pin 15x7 (than 13 + dau cuc 2), ben phai ket thuc o `rx`. Co the kem so %.
 // Pin <= 10% thi nhap nhay phan ruot (khi co t_ms).
 static void DrawBattery(int rx, int y, int pct, bool text, uint32_t t_ms) {
@@ -35,7 +65,7 @@ static void DrawBattery(int rx, int y, int pct, bool text, uint32_t t_ms) {
     }
     if (text) {
         char b[16];
-        snprintf(b, sizeof(b), "%d%%", pct);
+        snprintf(b, sizeof(b), "%d", pct);
         TextR(kFontS, x - 3, y + 6, b);
     }
 }
@@ -58,6 +88,16 @@ static void DrawWifi(int x, int baseline, int level) {
         Line(x + 12, baseline - 6, x + 16, baseline);  // dau X: mat ket noi
         Line(x + 16, baseline - 6, x + 12, baseline);
     }
+}
+
+// Bieu tuong dong ho: mat tron + 2 kim
+static void DrawClockIcon(int cx, int cy) {
+    Ring(cx, cy, 11, 2);
+    Line(cx, cy, cx, cy - 7);
+    Line(cx + 1, cy, cx + 1, cy - 7);
+    Line(cx, cy, cx + 5, cy + 3);
+    Line(cx, cy + 1, cx + 5, cy + 4);
+    Box(cx - 1, cy - 1, 3, 3);
 }
 
 // Banh rang (cai dat): than tron + 8 rang + lo giua. fg = mau dang ve
@@ -85,12 +125,14 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
     DrawBattery(127, 1, batt, true, 0);
 
     static const Bmp* const kIcons[3] = {&icChat, &icRadio, &icNav};
-    static const char* const kNames[4] = {"CHAT", "RADIO", "WAZE", "SET"};
-    const int tw = 29, th = 36, gap = 3, ty = 11;
-    const int x0 = (kW - (4 * tw + 3 * gap)) / 2;
+    static const char* const kNames[5] = {"CHAT AI", "RADIO", "WAZE", "CLOCK", "SET"};
+    const int n = 5, tw = 36, th = 36, gap = 4, ty = 11;
+    const int x0 = (kW - (3 * tw + 2 * gap)) / 2;
+    int first = std::clamp(sel - 1, 0, n - 3);  // cua so 3 o, cuon theo o dang chon
 
-    for (int i = 0; i < 4; ++i) {
-        int x = x0 + i * (tw + gap);
+    for (int k = 0; k < 3; ++k) {
+        int i = first + k;
+        int x = x0 + k * (tw + gap);
         bool on = (i == sel);
         SetColor(true);
         if (on) {
@@ -101,10 +143,24 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
         SetColor(!on);
         if (i < 3) {
             Draw(*kIcons[i], x + (tw - kIcons[i]->w) / 2, ty + 3);
+        } else if (i == 3) {
+            DrawClockIcon(x + tw / 2, ty + 15);
         } else {
             DrawGear(x + tw / 2, ty + 15, on);
         }
         TextC(kFontS, x + tw / 2, ty + 33, kNames[i]);
+    }
+    // Mui ten bao con o ben trai/phai
+    SetColor(true);
+    if (first > 0) {
+        Line(4, 29, 1, 29);
+        Line(3, 27, 3, 31);
+        Line(2, 28, 2, 30);
+    }
+    if (first + 3 < n) {
+        Line(123, 29, 126, 29);
+        Line(124, 27, 124, 31);
+        Line(125, 28, 125, 30);
     }
     SetColor(true);
 
@@ -112,22 +168,270 @@ void DrawMenu(int sel, int ms_left, int ms_total, int batt, const char* clock) {
         int w = 124 * std::max(ms_left, 0) / ms_total;
         Frame(2, 59, 124, 4);
         Box(2, 59, w, 4);
-        TextC(kFontS, 64, 55, "10: next   4: select");
+        Hints(55, "next", "select");
     } else {
-        TextC(kFontS, 64, 58, "10: next    4: select");
+        Hints(58, "next", "select");
     }
 }
 
+
+// ================================================================ Dong ho / Thoi tiet
+
+void DrawClock(const ClockView& v) {
+    Clear();
+    SetColor(true);
+    DrawWifi(2, 9, v.wifi);
+    DrawBattery(127, 1, v.batt, true, 0);
+    if (v.alarm_on) {
+        char a[8];
+        snprintf(a, sizeof(a), "%02d:%02d", v.alarm_h % 100, v.alarm_m % 100);
+        DrawBell(34, 1);
+        Text(kFontS, 41, 8, a);
+    }
+
+    // Doi vi tri 1px moi phut de OLED khong bi in bong
+    int dx = v.valid ? (v.m % 3) - 1 : 0;
+    int dy = v.valid ? ((v.m / 3) % 3) - 1 : 0;
+    char hh[4], mm[4];
+    snprintf(hh, sizeof(hh), "%02d", v.valid ? v.h % 100 : 0);
+    snprintf(mm, sizeof(mm), "%02d", v.valid ? v.m % 100 : 0);
+    const int w2 = TextWidth(kFontXL, "00");
+    const int cg = 12;  // khoang cho dau hai cham
+    int x0 = (kW - (2 * w2 + cg)) / 2 + dx;
+    int base = 45 + dy;
+    if (v.valid) {
+        Text(kFontXL, x0, base, hh);
+        Text(kFontXL, x0 + w2 + cg, base, mm);
+        if (v.s % 2 == 0) {  // dau hai cham nhap nhay moi giay
+            int cx = x0 + w2 + cg / 2 - 2;
+            Box(cx - 1, base - 20, 3, 3);
+            Box(cx - 1, base - 9, 3, 3);
+        }
+        static const char* const kDays[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+        char d[40];
+        snprintf(d, sizeof(d), "%s  %02d/%02d/%04d", kDays[((v.wday % 7) + 7) % 7], v.day % 100, v.mon % 100,
+                 v.year % 10000);
+        TextC(kFontM, 64 + dx, 62, d);
+    } else {
+        TextC(kFontXL, 64, base, "--:--");
+        TextC(kFontM, 64, 62, "Syncing time...");
+    }
+}
+
+// ---- Bieu tuong thoi tiet (nhom theo ma WMO)
+static void Disc(int cx, int cy, int r) {
+    Ring(cx, cy, r, r);
+    Pix(cx, cy);
+}
+
+static void CloudShape(int cx, int cy, int g) {
+    Disc(cx - 8, cy + 3, 6 + g);
+    Disc(cx + 1, cy - 3, 8 + g);
+    Disc(cx + 9, cy + 3, 6 + g);
+    Box(cx - 8, cy + 3 - g, 18, 6 + g * 2);
+}
+
+// Dam may co vien den xung quanh de de len mat troi
+static void Cloud(int cx, int cy) {
+    SetColor(false);
+    CloudShape(cx, cy, 2);
+    SetColor(true);
+    CloudShape(cx, cy, 0);
+}
+
+static void Sun(int cx, int cy, int r) {
+    Disc(cx, cy, r);
+    static const int8_t kD[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+    for (int i = 0; i < 8; ++i) {
+        int dx = kD[i][0], dy = kD[i][1];
+        int a = r + 3, b = r + 6;
+        if (dx != 0 && dy != 0) {
+            a = (r + 3) * 7 / 10;
+            b = (r + 6) * 7 / 10;
+        }
+        Line(cx + dx * a, cy + dy * a, cx + dx * b, cy + dy * b);
+    }
+}
+
+static void WeatherIcon(int cx, int cy, int code) {
+    SetColor(true);
+    if (code == 0) {
+        Sun(cx, cy, 8);
+    } else if (code <= 2) {
+        Sun(cx - 7, cy - 7, 5);
+        Cloud(cx + 4, cy + 3);
+    } else if (code == 3) {
+        Cloud(cx, cy);
+    } else if (code == 45 || code == 48) {
+        for (int i = 0; i < 4; ++i) {
+            Line(cx - 14 + (i % 2) * 3, cy - 9 + i * 6, cx + 12 + (i % 2) * 3, cy - 9 + i * 6);
+        }
+    } else if (code >= 95) {
+        Cloud(cx, cy - 6);
+        Line(cx + 2, cy + 4, cx - 3, cy + 11);  // tia set
+        Line(cx + 3, cy + 4, cx - 2, cy + 11);
+        Line(cx - 3, cy + 11, cx + 3, cy + 11);
+        Line(cx + 3, cy + 11, cx - 2, cy + 18);
+        Line(cx + 4, cy + 11, cx - 1, cy + 18);
+    } else if ((code >= 71 && code <= 77) || code == 85 || code == 86) {
+        Cloud(cx, cy - 6);
+        for (int i = 0; i < 3; ++i) {  // bong tuyet
+            int x = cx - 8 + i * 8, y = cy + 10 + (i % 2) * 4;
+            Line(x - 2, y, x + 2, y);
+            Line(x, y - 2, x, y + 2);
+        }
+    } else {
+        Cloud(cx, cy - 6);
+        for (int i = 0; i < 4; ++i) {  // hat mua
+            int x = cx - 10 + i * 7, y = cy + 6 + (i % 2) * 3;
+            Line(x, y, x - 2, y + 6);
+        }
+    }
+}
+
+static const char* WeatherText(int c) {
+    if (c == 0) return "Clear";
+    if (c <= 2) return "Partly cloudy";
+    if (c == 3) return "Cloudy";
+    if (c == 45 || c == 48) return "Fog";
+    if (c >= 51 && c <= 57) return "Drizzle";
+    if (c >= 61 && c <= 67) return "Rain";
+    if ((c >= 71 && c <= 77) || c == 85 || c == 86) return "Snow";
+    if (c >= 80 && c <= 82) return "Showers";
+    if (c >= 95) return "Storm";
+    return "Cloudy";
+}
+
+void DrawWeather(const WeatherView& v) {
+    Clear();
+    SetColor(true);
+    DrawWifi(2, 9, v.wifi);
+    TextC(kFontS, 64, 8, v.city);
+    DrawBattery(127, 1, v.batt, true, 0);
+
+    if (!v.valid) {
+        TextC(kFontM, 64, 36, v.msg[0] ? v.msg : "Loading weather...");
+        Hints(62, "refresh", "clock");
+        return;
+    }
+    WeatherIcon(22, 28, v.code);
+    char b[32];
+    snprintf(b, sizeof(b), "%d", v.temp);
+    int tw = TextWidth(kFontXL, b);
+    int tx = 46;
+    Text(kFontXL, tx, 42, b);
+    Ring(tx + tw + 5, 17, 3, 1);   // dau do
+    Text(kFontM, tx + tw + 10, 30, "C");
+    // Mo ta + cao/thap
+    Text(kFontM, 46, 54, WeatherText(v.code));
+    snprintf(b, sizeof(b), "%d/%d", v.tmax, v.tmin);
+    TextR(kFontS, 126, 33, b);
+    char d[40];
+    snprintf(d, sizeof(d), "Hum %d%%  Wind %d  Rain %d%%", v.hum, v.wind, v.rain);
+    TextC(kFontS, 64, 63, d);
+}
+
+static const char* RepeatText(int r) { return r == 1 ? "Daily" : r == 2 ? "Mon-Fri" : "Once"; }
+
+void DrawAlarm(const AlarmView& v) {
+    Clear();
+    SetColor(true);
+    DrawBattery(127, 1, v.batt, true, 0);
+    if (v.edit >= 0) {
+        Text(kFontS, 2, 8, "Set alarm");
+    } else {
+        DrawBell(5, 1);
+        Text(kFontS, 12, 8, "Alarm");
+        Text(kFontS, 44, 8, "hold");  // giu nut tren de sua
+        TriUp(66, 8);
+        Text(kFontS, 75, 8, "edit");
+    }
+
+    char hh[4], mm[4];
+    snprintf(hh, sizeof(hh), "%02d", v.h % 100);
+    snprintf(mm, sizeof(mm), "%02d", v.m % 100);
+    const int w2 = TextWidth(kFontXL, "00");
+    const int cg = 12;
+    int x0 = (kW - (2 * w2 + cg)) / 2;
+    const int base = 43;
+    // Truong dang sua: ve dao mau trong o chu nhat
+    if (v.edit == 0) {
+        RoundBox(x0 - 3, base - 32, w2 + 6, 36, 3);
+        SetColor(false);
+    }
+    Text(kFontXL, x0, base, hh);
+    SetColor(true);
+    if (v.edit == 1) {
+        RoundBox(x0 + w2 + cg - 3, base - 32, w2 + 6, 36, 3);
+        SetColor(false);
+    }
+    Text(kFontXL, x0 + w2 + cg, base, mm);
+    SetColor(true);
+    int cx = x0 + w2 + cg / 2 - 2;
+    Box(cx - 1, base - 20, 3, 3);
+    Box(cx - 1, base - 9, 3, 3);
+
+    // Dong duoi: lap lai (trai), bat/tat (phai)
+    if (v.edit == 2) {
+        int w = TextWidth(kFontS, RepeatText(v.repeat));
+        RoundBox(1, 46, w + 6, 10, 2);
+        SetColor(false);
+        Text(kFontS, 4, 54, RepeatText(v.repeat));
+        SetColor(true);
+    } else {
+        Text(kFontS, 4, 54, RepeatText(v.repeat));
+    }
+    if (v.on) {
+        RoundBox(104, 46, 22, 10, 2);
+        SetColor(false);
+        TextR(kFontS, 123, 54, "ON");
+        SetColor(true);
+    } else {
+        RoundFrame(104, 46, 22, 10, 2);
+        TextR(kFontS, 123, 54, "OFF");
+    }
+    if (v.edit >= 0) {
+        Hints(63, "change", v.edit == 2 ? "done" : "next");
+    } else {
+        Hints(63, "on/off", "next");
+    }
+}
+
+void DrawAlarmRing(int h, int m, uint32_t t_ms) {
+    Clear();
+    bool inv = ((t_ms / 500) % 2) == 0;
+    SetColor(true);
+    if (inv) {
+        Box(0, 0, kW, kH);
+        SetColor(false);
+    }
+    DrawBell(40, 3);
+    Text(kFontM, 50, 14, "ALARM");
+    char hh[4], mm[4];
+    snprintf(hh, sizeof(hh), "%02d", h % 100);
+    snprintf(mm, sizeof(mm), "%02d", m % 100);
+    const int w2 = TextWidth(kFontXL, "00");
+    const int cg = 12;
+    int x0 = (kW - (2 * w2 + cg)) / 2;
+    Text(kFontXL, x0, 50, hh);
+    Text(kFontXL, x0 + w2 + cg, 50, mm);
+    int cx = x0 + w2 + cg / 2 - 2;
+    Box(cx - 1, 50 - 20, 3, 3);
+    Box(cx - 1, 50 - 9, 3, 3);
+    // goi y trong vien duoi: dung Hints voi mau hien tai
+    Hints(63, "snooze", "stop");
+    SetColor(true);
+}
 
 // ================================================================ Settings
 
 void DrawSettings(const SettingsView& v) {
     Clear();
     SetColor(true);
-    Text(kFontS, 2, 8, v.item == 3 ? "INFO" : "Settings");
+    Text(kFontS, 2, 8, v.item == 4 ? "INFO" : "Settings");
     DrawBattery(127, 1, v.batt, true, 0);
 
-    if (v.item == 3) {
+    if (v.item == 4) {
         char b[48];
         Text(kFontS, 2, 24, "Firmware");
         TextR(kFontS, 126, 24, v.version);
@@ -136,16 +440,16 @@ void DrawSettings(const SettingsView& v) {
         TextR(kFontS, 126, 35, v.mv > 0 ? b : "-");
         Text(kFontS, 2, 46, "Web IP");
         TextR(kFontS, 126, 46, v.ip[0] ? v.ip : "open Radio");
-        TextC(kFontS, 64, 62, "4: back to menu");
+        Hints(62, nullptr, "back to menu");
         return;
     }
 
-    static const char* const kLabels[3] = {"Brightness", "Radio screen off", "WiFi power save"};
-    for (int i = 0; i < 3; ++i) {
-        int base = 23 + i * 12;
+    static const char* const kLabels[4] = {"Brightness", "Screen off", "WiFi power save", "Weather city"};
+    for (int i = 0; i < 4; ++i) {
+        int base = 19 + i * 10;
         bool on = (i == v.item);
         if (on) {
-            RoundBox(1, base - 9, 126, 11, 2);
+            RoundBox(1, base - 8, 126, 10, 2);
             SetColor(false);
         }
         Text(kFontS, 4, base, kLabels[i]);
@@ -153,7 +457,7 @@ void DrawSettings(const SettingsView& v) {
             // 5 vach cao dan; vach <= muc hien tai dac
             int n = v.bright_levels;
             for (int k = 0; k < n; ++k) {
-                int h = 2 + k * 2 / 1;
+                int h = 2 + k * 3 / 2;
                 int x = 126 - (n - k) * 5;
                 if (k <= v.bright) {
                     Box(x, base + 1 - h, 3, h);
@@ -163,12 +467,14 @@ void DrawSettings(const SettingsView& v) {
             }
         } else if (i == 1) {
             TextR(kFontS, 124, base, v.soff);
+        } else if (i == 3) {
+            TextR(kFontS, 124, base, v.city);
         } else {
             TextR(kFontS, 124, base, v.wifi_save ? "On" : "Off");
         }
         SetColor(true);
     }
-    TextC(kFontS, 64, 62, "10: change   4: next");
+    Hints(62, "change", "next");
 }
 
 // ================================================================ Radio
@@ -782,7 +1088,18 @@ void DrawChat(const ChatView& v) {
     // ---- Duoi: chu AI noi (2 dong, tu lat trang)
     const char* msg = v.msg != nullptr ? v.msg : "";
     if (msg[0] == 0) {
-        TextC(kFontS, 64, 58, v.mode == kChatIdle ? "Say 'Hi,ESP' or press 4" : "...");
+        if (v.mode == kChatIdle) {
+            // Wake word da tat (de du RAM): chi bam nut duoi de noi
+            const char* a = "Press";
+            const char* b = "to talk";
+            int wa = TextWidth(kFontS, a), wb = TextWidth(kFontS, b);
+            int x = (kW - (wa + 3 + 7 + 3 + wb)) / 2;
+            Text(kFontS, x, 58, a);
+            TriDown(x + wa + 3, 58);
+            Text(kFontS, x + wa + 13, 58, b);
+        } else {
+            TextC(kFontS, 64, 58, "...");
+        }
         return;
     }
     int starts[24], lens[24];

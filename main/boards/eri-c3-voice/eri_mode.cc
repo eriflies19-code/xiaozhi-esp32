@@ -7,6 +7,7 @@
 #include "eri_ui.h"
 #include "eri_radio.h"
 #include "eri_prefs.h"
+#include "eri_clock_app.h"
 
 #include "board.h"
 #include "display.h"
@@ -31,7 +32,7 @@
 namespace EriMode {
 
 static constexpr int kMenuSeconds = 5;
-static constexpr int kModeCount = 4;  // 0 = Chat AI, 1 = Radio, 2 = WAZE HUD, 3 = Settings
+static constexpr int kModeCount = 5;  // 0 = Chat AI, 1 = Radio, 2 = WAZE HUD, 3 = Clock, 4 = Settings
 
 static std::atomic<int> g_mode{static_cast<int>(Mode::kChat)};
 static std::atomic<int> g_sel{0};          // 0 = Chat AI, 1 = Radio, 2 = WAZE HUD
@@ -97,7 +98,7 @@ bool Run() {
             EriUi::DrawMenu(g_sel, left, counting ? total_ms : 0, EriBattery::Percent(), clk);
             EriScreen::Present();
         }
-        if (g_sel != 3) {
+        if (g_sel != 4) {
             break;
         }
         // Settings: GPIO10 doi gia tri (xem ngay), GPIO4 sang muc ke tiep, het muc cuoi thi luu va ve menu
@@ -110,7 +111,7 @@ bool Run() {
         if (const esp_app_desc_t* d = esp_app_get_description()) {
             ver = d->version;
         }
-        while (item < 4) {
+        while (item < 5) {
             vTaskDelay(pdMS_TO_TICKS(50));
             if (g_set_change.exchange(false)) {
                 if (item == 0) {
@@ -119,6 +120,8 @@ bool Run() {
                     EriPrefs::NextScreenOff();
                 } else if (item == 2) {
                     EriPrefs::ToggleWifiPowerSave();
+                } else if (item == 3) {
+                    EriPrefs::NextCity();
                 }
             }
             if (g_set_next.exchange(false)) {
@@ -128,7 +131,7 @@ bool Run() {
             char ip[20] = "";
             esp_netif_ip_info_t info = {};
             esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-            if (item == 3 && nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
+            if (item == 4 && nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
                 esp_ip4addr_ntoa(&info.ip, ip, sizeof(ip));
             }
             EriUi::SettingsView v;
@@ -137,6 +140,7 @@ bool Run() {
             v.bright_levels = EriScreen::kBrightLevels;
             v.soff = EriPrefs::ScreenOffLabel(EriPrefs::ScreenOffIndex());
             v.wifi_save = EriPrefs::WifiPowerSave();
+            v.city = EriPrefs::kCities[EriPrefs::CityIndex()].name;
             v.version = ver;
             v.mv = EriBattery::Millivolts();
             v.ip = ip;
@@ -161,7 +165,7 @@ bool Run() {
             settings.SetInt("skip", 1);
         }
     }
-    ESP_LOGI(TAG, "Selected mode: %s", sel == 2 ? "waze" : (sel == 1 ? "radio" : "chat"));
+    ESP_LOGI(TAG, "Selected mode: %s", sel == 3 ? "clock" : (sel == 2 ? "waze" : (sel == 1 ? "radio" : "chat")));
 
     if (sel == 1) {
         g_mode = static_cast<int>(Mode::kRadio);
@@ -171,6 +175,11 @@ bool Run() {
     if (sel == 2) {
         g_mode = static_cast<int>(Mode::kHud);
         EriHud::Start();
+        return true;
+    }
+    if (sel == 3) {
+        g_mode = static_cast<int>(Mode::kClock);
+        EriClockApp::Start();
         return true;
     }
 
@@ -203,6 +212,9 @@ bool HandleChatClick() {
             return true;
         case Mode::kHud:
             EriHud::ToggleMute();
+            return true;
+        case Mode::kClock:
+            EriClockApp::OnDown();
             return true;
         case Mode::kSettings:
             if (!MenuSettling()) {
@@ -241,6 +253,9 @@ bool HandleVolumeClick() {
         case Mode::kHud:
             EriHud::ToggleDemo();
             return true;
+        case Mode::kClock:
+            EriClockApp::OnUp();
+            return true;
         case Mode::kSettings:
             if (!MenuSettling()) {
                 g_set_change = true;
@@ -263,6 +278,9 @@ bool HandleVolumeLongPress() {
             }
             return true;
         case Mode::kHud:
+            return true;
+        case Mode::kClock:
+            EriClockApp::OnUpHold();
             return true;
         default:
             return false;

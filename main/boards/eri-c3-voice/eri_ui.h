@@ -7,17 +7,53 @@
 
 namespace EriUi {
 
-// ---- Menu chon che do. sel: 0 Chat AI, 1 Radio, 2 WAZE HUD, 3 Settings.
+// ---- Menu chon che do. sel: 0 Chat AI, 1 Radio, 2 WAZE HUD, 3 Clock, 4 Settings.
 // ms_total = 0: dang cho (khong dem nguoc); nguoc lai ve thanh dem nguoc.
 void DrawMenu(int sel, int ms_left, int ms_total, int batt = -1,
               const char* clock = nullptr);  // batt: 0..100, -1 = an; clock: chuoi gio, nullptr = an
 
-// ---- Man hinh Settings. item: 0 do sang, 1 tat man hinh Radio, 2 WiFi save, 3 trang thong tin
+// ---- Dong ho lon va thoi tiet
+struct ClockView {
+    bool valid = false;
+    int h = 0, m = 0, s = 0;
+    int day = 1, mon = 1, year = 2025, wday = 0;  // wday 0 = Chu nhat
+    int wifi = 0, batt = -1;
+    bool alarm_on = false;       // bao thuc dang bat: hien chuong + gio o thanh tren
+    int alarm_h = 0, alarm_m = 0;
+};
+void DrawClock(const ClockView& v);
+
+// Man hinh cai dat bao thuc. edit: -1 = chi xem, 0 gio, 1 phut, 2 lap lai (dang sua truong do)
+struct AlarmView {
+    int h = 6, m = 30;
+    int repeat = 0;  // 0 mot lan, 1 hang ngay, 2 thu 2 - thu 6
+    bool on = false;
+    int edit = -1;
+    int wifi = 0, batt = -1;
+};
+void DrawAlarm(const AlarmView& v);
+// Man hinh dang reo (nhap nhay). t_ms: thoi gian dang chay
+void DrawAlarmRing(int h, int m, uint32_t t_ms);
+
+struct WeatherView {
+    bool valid = false;
+    int temp = 0, tmin = 0, tmax = 0;  // do C
+    int hum = 0, wind = 0, rain = 0;   // %, km/h, % kha nang mua
+    int code = 0;                      // ma thoi tiet WMO
+    const char* city = "";
+    const char* msg = "";              // trang thai khi chua co so lieu
+    int age_min = 0;
+    int wifi = 0, batt = -1;
+};
+void DrawWeather(const WeatherView& v);
+
+// ---- Man hinh Settings. item: 0 do sang, 1 tat man hinh Radio, 2 WiFi save, 3 thanh pho thoi tiet, 4 thong tin
 struct SettingsView {
     int item = 0;
     int bright = 0, bright_levels = 5;
     const char* soff = "";   // vd "3 min"
     bool wifi_save = false;
+    const char* city = "";
     const char* version = "";
     int mv = 0;              // dien ap pin (mV)
     const char* ip = "";     // rong = chua ket noi
