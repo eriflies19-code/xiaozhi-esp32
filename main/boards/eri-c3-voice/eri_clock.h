@@ -42,6 +42,15 @@ inline void Format(char* out, size_t n) {
              (t.tm_mon + 1) % 100);
 }
 
+// Ghi "HH:MM  dd/mm"; chuoi rong neu chua co gio (dung cho Chat AI)
+inline void FormatOrEmpty(char* out, size_t n) {
+    if (!Valid()) {
+        out[0] = 0;
+        return;
+    }
+    Format(out, n);
+}
+
 // Sau moi lan SNTP dat gio UTC: cong mui gio de ra gio dia phuong
 inline void OnSntpSync(struct timeval*) {
     struct timeval now;

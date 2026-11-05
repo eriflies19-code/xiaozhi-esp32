@@ -15,6 +15,7 @@ inline constexpr int kScreenOffCount = 4;
 inline int g_soff = -1;
 inline int g_wps = -1;
 inline int g_wcity = -1;
+inline int g_aoff = -1;
 
 struct City {
     const char* name;
@@ -66,6 +67,26 @@ inline const char* ScreenOffLabel(int idx) {
     return kL[(idx >= 0 && idx < kScreenOffCount) ? idx : 1];
 }
 
+// Tu tat nguon (deep sleep) khi khong thao tac: 0 = khong, 1 = 10 phut, 2 = 30 phut, 3 = 60 phut
+inline constexpr int kAutoOffCount = 4;
+inline int AutoOffIndex() {
+    if (g_aoff < 0) {
+        Settings st("eri", false);
+        int v = st.GetInt("aoff", 0);
+        g_aoff = (v >= 0 && v < kAutoOffCount) ? v : 0;
+    }
+    return g_aoff;
+}
+inline uint32_t AutoOffMs() {
+    static const uint32_t kMs[kAutoOffCount] = {0, 10 * 60000u, 30 * 60000u, 60 * 60000u};
+    return kMs[AutoOffIndex()];
+}
+inline const char* AutoOffLabel(int idx) {
+    static const char* const kL[kAutoOffCount] = {"Never", "10 min", "30 min", "60 min"};
+    return kL[(idx >= 0 && idx < kAutoOffCount) ? idx : 0];
+}
+inline void NextAutoOff() { g_aoff = (AutoOffIndex() + 1) % kAutoOffCount; }
+
 inline void NextScreenOff() { g_soff = (ScreenOffIndex() + 1) % kScreenOffCount; }
 inline void ToggleWifiPowerSave() { g_wps = WifiPowerSave() ? 0 : 1; }
 
@@ -74,6 +95,7 @@ inline void Save() {
     st.SetInt("soff", ScreenOffIndex());
     st.SetInt("wps", WifiPowerSave() ? 1 : 0);
     st.SetInt("wcity", CityIndex());
+    st.SetInt("aoff", AutoOffIndex());
 }
 
 }  // namespace EriPrefs

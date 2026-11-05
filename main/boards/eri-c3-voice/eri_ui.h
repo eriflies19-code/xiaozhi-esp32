@@ -47,13 +47,33 @@ struct WeatherView {
 };
 void DrawWeather(const WeatherView& v);
 
-// ---- Man hinh Settings. item: 0 do sang, 1 tat man hinh Radio, 2 WiFi save, 3 thanh pho thoi tiet, 4 thong tin
+// Du bao 3 ngay
+struct ForecastView {
+    bool valid = false;
+    const char* city = "";
+    const char* msg = "";
+    char day[3][4] = {"", "", ""};  // "Mon", ...
+    int code[3] = {0, 0, 0};
+    int tmax[3] = {0, 0, 0};
+    int tmin[3] = {0, 0, 0};
+    int wifi = 0, batt = -1;
+};
+void DrawForecast(const ForecastView& v);
+
+// Thong bao giua man hinh (tat nguon...) + thong bao pin yeu de EriScreen ve de len moi man hinh
+void DrawNotice(const char* line1, const char* line2);
+void DrawLowBatteryBanner(int pct);
+// Logo luc cap nguon (t_ms: thoi gian tu luc bat dau, ~1500ms)
+void DrawSplash(uint32_t t_ms, const char* version);
+
+// ---- Man hinh Settings. item: 0 do sang, 1 tat man hinh, 2 WiFi save, 3 thanh pho thoi tiet, 4 tu tat nguon, 5 thong tin
 struct SettingsView {
     int item = 0;
     int bright = 0, bright_levels = 5;
     const char* soff = "";   // vd "3 min"
     bool wifi_save = false;
     const char* city = "";
+    const char* aoff = "";   // tu tat nguon, vd "30 min"
     const char* version = "";
     int mv = 0;              // dien ap pin (mV)
     const char* ip = "";     // rong = chua ket noi
@@ -76,6 +96,7 @@ struct RadioView {
     int batt = -1;           // muc pin 0..100, -1 = khong hien
     int wifi = -1;           // 0 = mat WiFi, 1..4 = vach song, -1 = khong hien
     uint32_t t_ms = 0;
+    uint32_t since_switch_ms = 100000;  // ms ke tu khi doi dai: < 2000 thi hien so dai + ten to
 };
 void DrawRadio(const RadioView& v);
 
@@ -108,6 +129,7 @@ struct ChatView {
     int mode = kChatIdle;
     uint32_t t_ms = 0;
     uint32_t msg_age_ms = 0;   // thoi gian ke tu khi chu thay doi (de lat trang)
+    const char* clock = "";    // "HH:MM  dd/mm" (hien thay chu Standby khi dang cho), "" = khong co gio
 };
 void DrawChat(const ChatView& v);
 

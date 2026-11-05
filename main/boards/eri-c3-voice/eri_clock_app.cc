@@ -4,6 +4,7 @@
 #include "eri_battery.h"
 #include "eri_wifi_level.h"
 #include "eri_clock.h"
+#include "eri_power.h"
 #include "eri_prefs.h"
 #include "eri_screen.h"
 #include "eri_ui.h"
@@ -49,12 +50,15 @@ struct Weather {
     int temp = 0, tmin = 0, tmax = 0, hum = 0, wind = 0, rain = 0, code = 0;
     uint32_t at_ms = 0;
     int city = -1;  // thanh pho cua so lieu nay
+    int fcode[3] = {0, 0, 0};  // du bao 3 ngay (hom nay, mai, mot)
+    int fmax[3] = {0, 0, 0};
+    int fmin[3] = {0, 0, 0};
 };
 
 static std::mutex g_mu;
 static Weather g_w;
 static char g_msg[40] = "Connecting WiFi...";
-static std::atomic<int> g_page{0};  // 0 dong ho, 1 thoi tiet, 2 bao thuc
+static std::atomic<int> g_page{0};  // 0 dong ho, 1 thoi tiet, 2 du bao, 3 bao thuc
 static std::atomic<bool> g_refresh{true};
 static std::atomic<bool> g_asleep{false};         // man hinh dang tat (bao thuc van chay)
 static std::atomic<uint32_t> g_last_act_ms{0};
@@ -62,7 +66,8 @@ static std::atomic<uint32_t> g_last_act_ms{0};
 static uint32_t NowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
 // ---------------------------------------------------------------- Bao thuc
-static constexpr int kPages = 3;                  // 0 dong ho, 1 thoi tiet, 2 bao thuc
+static constexpr int kPages = 4;                  // 0 dong ho, 1 thoi tiet, 2 du bao 3 ngay, 3 bao thuc
+static constexpr int kAlarmPage = 3;
 static constexpr uint32_t kSnoozeMs = 5 * 60 * 1000;
 static constexpr uint32_t kRingMaxMs = 90 * 1000;  // tu tat sau 90 giay neu khong ai bam
 static constexpr int kSampleRate = 16000;
@@ -251,12 +256,12 @@ static bool EnsureWifi() {
 // GET https://api.open-meteo.com/... (HTTP/1.0 de khong bi chunked)
 static bool FetchWeather(int city_idx, Weather* out) {
     const EriPrefs::City& c = EriPrefs::kCities[city_idx];
-    char req[420];
+    char req[480];
     snprintf(req, sizeof(req),
              "GET /v1/forecast?latitude=%.2f&longitude=%.2f"
              "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"
-             "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-             "&forecast_days=1&timezone=auto HTTP/1.0\r\n"
+             "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+             "&forecast_days=3&timezone=auto HTTP/1.0\r\n"
              "Host: api.open-meteo.com\r\nUser-Agent: eri-c3\r\nConnection: close\r\n\r\n",
              c.lat, c.lon);
 
@@ -326,6 +331,16 @@ static bool FetchWeather(int city_idx, Weather* out) {
                     out->tmax = r(first(day, "temperature_2m_max", out->temp));
                     out->tmin = r(first(day, "temperature_2m_min", out->temp));
                     out->rain = r(first(day, "precipitation_probability_max", 0));
+                    auto nth = [](cJSON* o, const char* k, int i, double d) {
+                        cJSON* a = cJSON_GetObjectItem(o, k);
+                        cJSON* it = cJSON_IsArray(a) ? cJSON_GetArrayItem(a, i) : nullptr;
+                        return cJSON_IsNumber(it) ? it->valuedouble : d;
+                    };
+                    for (int i = 0; i < 3; ++i) {
+                        out->fcode[i] = r(nth(day, "weather_code", i, 0));
+                        out->fmax[i] = r(nth(day, "temperature_2m_max", i, out->temp));
+                        out->fmin[i] = r(nth(day, "temperature_2m_min", i, out->temp));
+                    }
                 } else {
                     out->tmax = out->tmin = out->temp;
                 }
@@ -384,6 +399,11 @@ static void UiTask(void*) {
         }
         int batt = EriBattery::Percent();
         AlarmTick();
+        // Tu tat nguon khi khong thao tac (khong ap dung khi dang bat bao thuc de khong lo bao thuc)
+        if (!g_al_on.load() && !g_ringing.load() && g_edit.load() < 0 &&
+            EriPower::IdleFor(g_last_act_ms.load(), EriPrefs::AutoOffMs())) {
+            EriPower::Sleep("Auto off", "Press 4 to wake");
+        }
         if (g_ringing.load() && g_asleep.load()) {
             WakeIfAsleep();  // den gio bao thuc: bat man hinh
         }
@@ -406,7 +426,7 @@ static void UiTask(void*) {
             continue;
         }
         int page = g_page.load();
-        if (page == 2) {
+        if (page == kAlarmPage) {
             EriUi::AlarmView v;
             v.h = g_al_h.load();
             v.m = g_al_m.load();
@@ -437,6 +457,38 @@ static void UiTask(void*) {
                 v.wday = t.tm_wday;
             }
             EriUi::DrawClock(v);
+        } else if (page == 2) {
+            EriUi::ForecastView v;
+            Weather w;
+            char msg[40];
+            {
+                std::lock_guard<std::mutex> lk(g_mu);
+                w = g_w;
+                snprintf(msg, sizeof(msg), "%s", g_msg);
+            }
+            int city = EriPrefs::CityIndex();
+            v.city = EriPrefs::kCities[city].name;
+            v.msg = msg;
+            v.wifi = wifi;
+            v.batt = batt;
+            if (w.valid && w.city == city) {
+                v.valid = true;
+                static const char* const kDays[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+                int wd = 0;
+                if (EriClock::Valid()) {
+                    time_t now = time(nullptr);
+                    struct tm t;
+                    localtime_r(&now, &t);
+                    wd = t.tm_wday;
+                }
+                for (int i = 0; i < 3; ++i) {
+                    snprintf(v.day[i], sizeof(v.day[i]), "%s", kDays[(wd + i) % 7]);
+                    v.code[i] = w.fcode[i];
+                    v.tmax[i] = w.fmax[i];
+                    v.tmin[i] = w.fmin[i];
+                }
+            }
+            EriUi::DrawForecast(v);
         } else {
             EriUi::WeatherView v;
             Weather w;
@@ -528,13 +580,13 @@ void OnUp() {
         g_al_m = (g_al_m.load() / 5 * 5 + 5) % 60;  // bam: +5 phut
     } else if (e == 2) {
         g_al_rep = (g_al_rep.load() + 1) % 3;
-    } else if (g_page.load() == 2) {
+    } else if (g_page.load() == kAlarmPage) {
         bool on = !g_al_on.load();
         g_al_on = on;
         g_fired_key = -1;
         g_snooze_until = 0;
         SaveAlarm();
-    } else if (g_page.load() == 1) {
+    } else if (g_page.load() == 1 || g_page.load() == 2) {
         g_refresh = true;
         SetMsg("Loading weather...");
     }
@@ -551,7 +603,7 @@ void OnUpHold() {
         g_al_m = (g_al_m.load() + 1) % 60;
     } else if (e >= 0) {
         OnUp();
-    } else if (g_page.load() == 2) {
+    } else if (g_page.load() == kAlarmPage) {
         g_edit = 0;
         g_snooze_until = 0;
     }

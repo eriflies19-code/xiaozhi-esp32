@@ -5,14 +5,19 @@
         {
             "name": "eri-c3-voice",
             "sdkconfig_append": [
-                "CONFIG_BT_ENABLED=y",
-                "CONFIG_BT_NIMBLE_ENABLED=y",
-                "CONFIG_BT_NIMBLE_ROLE_CENTRAL=n",
-                "CONFIG_BT_NIMBLE_ROLE_OBSERVER=n",
-                "CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1",
-                "CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y",
-                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/4m.csv\""
+            "CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y",
+            "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/4m.csv\"",
+            "CONFIG_WAKE_WORD_DISABLED=y",
+            "CONFIG_BT_ENABLED=y",
+            "CONFIG_BT_NIMBLE_ENABLED=y",
+            "CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y",
+            "CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y",
+            "CONFIG_BT_NIMBLE_ROLE_CENTRAL=n",
+            "CONFIG_BT_NIMBLE_ROLE_OBSERVER=n",
+            "CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1",
+            "CONFIG_BT_NIMBLE_MEM_OPTIMIZATION=y"
             ]
+          
         }
     ]
 }

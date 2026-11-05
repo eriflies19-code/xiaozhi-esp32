@@ -2,6 +2,9 @@
 
 #include "application.h"
 #include "eri_battery.h"
+#include "eri_clock.h"
+#include "eri_power.h"
+#include "eri_prefs.h"
 #include "eri_wifi_level.h"
 #include "eri_screen.h"
 #include "eri_ui.h"
@@ -94,6 +97,7 @@ void EriChatDisplay::TaskEntry(void* arg) {
 void EriChatDisplay::Loop() {
     int wifi = 0;
     int wifi_tick = 0;
+    uint32_t idle_since = 0;  // ms luc bat dau cho (Standby), 0 = dang ban
     for (;;) {
         if (wifi_tick-- <= 0) {
             wifi = WifiLevel();
@@ -106,6 +110,21 @@ void EriChatDisplay::Loop() {
             case kDeviceStateConnecting:
             case kDeviceStateStarting: mode = EriUi::kChatBusy; break;
             default: break;
+        }
+
+        // Tu tat nguon khi cho (Standby) qua lau
+        {
+            uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+            if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+                if (idle_since == 0) {
+                    idle_since = now_ms | 1;
+                }
+                if (EriPower::IdleFor(idle_since, EriPrefs::AutoOffMs())) {
+                    EriPower::Sleep("Auto off", "Press 4 to wake");
+                }
+            } else {
+                idle_since = 0;
+            }
         }
 
         std::string status, notif, emo, msg;
@@ -129,6 +148,9 @@ void EriChatDisplay::Loop() {
         v.wifi = wifi;
         v.batt = EriBattery::Percent();
         v.mode = mode;
+        char clk[64];
+        EriClock::FormatOrEmpty(clk, sizeof(clk));
+        v.clock = clk;
         v.t_ms = static_cast<uint32_t>(now / 1000);
         v.msg_age_ms = static_cast<uint32_t>((now - since) / 1000);
         EriUi::DrawChat(v);

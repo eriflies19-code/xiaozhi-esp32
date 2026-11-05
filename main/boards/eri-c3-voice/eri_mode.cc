@@ -77,6 +77,24 @@ bool Run() {
     EriScreen::Begin();  // dung LVGL, menu ve bang EriGfx
     EriClock::Init();
 
+    // Logo ngan khi vua cap nguon hoac thuc day tu deep sleep (khong hien khi chuyen che do)
+    {
+        esp_reset_reason_t rr = esp_reset_reason();
+        if (rr == ESP_RST_POWERON || rr == ESP_RST_DEEPSLEEP) {
+            const char* ver = "";
+            if (const esp_app_desc_t* d = esp_app_get_description()) {
+                ver = d->version;
+            }
+            uint32_t ts = NowMs();
+            while (NowMs() - ts < 1500) {
+                EriUi::DrawSplash(NowMs() - ts, ver);
+                EriScreen::Present();
+                g_menu_start_ms = NowMs();  // bo qua nut bam trong luc hien logo (ke ca nut vua danh thuc)
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+        }
+    }
+
     const int total_ms = kMenuSeconds * 1000;
     uint32_t t0 = NowMs();
     bool counting = !stay;
@@ -111,7 +129,7 @@ bool Run() {
         if (const esp_app_desc_t* d = esp_app_get_description()) {
             ver = d->version;
         }
-        while (item < 5) {
+        while (item < 6) {
             vTaskDelay(pdMS_TO_TICKS(50));
             if (g_set_change.exchange(false)) {
                 if (item == 0) {
@@ -122,6 +140,8 @@ bool Run() {
                     EriPrefs::ToggleWifiPowerSave();
                 } else if (item == 3) {
                     EriPrefs::NextCity();
+                } else if (item == 4) {
+                    EriPrefs::NextAutoOff();
                 }
             }
             if (g_set_next.exchange(false)) {
@@ -131,7 +151,7 @@ bool Run() {
             char ip[20] = "";
             esp_netif_ip_info_t info = {};
             esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-            if (item == 4 && nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
+            if (item == 5 && nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
                 esp_ip4addr_ntoa(&info.ip, ip, sizeof(ip));
             }
             EriUi::SettingsView v;
@@ -141,6 +161,7 @@ bool Run() {
             v.soff = EriPrefs::ScreenOffLabel(EriPrefs::ScreenOffIndex());
             v.wifi_save = EriPrefs::WifiPowerSave();
             v.city = EriPrefs::kCities[EriPrefs::CityIndex()].name;
+            v.aoff = EriPrefs::AutoOffLabel(EriPrefs::AutoOffIndex());
             v.version = ver;
             v.mv = EriBattery::Millivolts();
             v.ip = ip;

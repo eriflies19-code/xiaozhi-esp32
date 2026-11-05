@@ -1,5 +1,7 @@
 #include "eri_screen.h"
+#include "eri_battery.h"
 #include "eri_gfx.h"
+#include "eri_ui.h"
 #include "settings.h"
 
 #include <esp_lcd_panel_io.h>
@@ -69,6 +71,10 @@ void Begin() {
 void Present() {
     if (g_eri_oled_panel == nullptr) {
         return;
+    }
+    // Pin yeu: ve thong bao de len man hinh hien tai (cac app ve lai ca khung moi lan nen tu bien mat)
+    if (EriBattery::BannerActive()) {
+        EriUi::DrawLowBatteryBanner(EriBattery::Percent());
     }
     const uint8_t* fb = EriGfx::Buffer();
     if (memcmp(fb, g_sent, sizeof(g_sent)) == 0) {

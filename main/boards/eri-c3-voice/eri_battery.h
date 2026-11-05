@@ -39,6 +39,18 @@ inline bool g_started = false;
 inline std::atomic<int> g_load_mv{0};
 inline std::atomic<bool> g_load_changed{false};
 
+// Pin yeu: <= 10% (khoang 3.6V) va khong cam USB (cam USB doc ~5V). Pin can: duoi 3.4V lien tuc
+// kCritHoldMs thi may tu tat (xem eri_power.h) de khong xa pin qua muc.
+inline constexpr int kLowPct = 10;
+inline constexpr int kCritMv = 3400;
+inline constexpr int kUsbMv = 4350;          // tren muc nay coi nhu dang cam USB / sac
+inline constexpr uint32_t kCritHoldMs = 30000;
+inline constexpr uint32_t kBannerMs = 4000;      // thoi gian hien thong bao "Low battery"
+inline constexpr uint32_t kBannerEveryMs = 5 * 60000;  // nhac lai moi 5 phut khi con yeu
+inline std::atomic<uint32_t> g_banner_until{0};  // ms (tick), 0 = khong hien
+inline std::atomic<bool> g_low{false};
+inline std::atomic<bool> g_critical{false};
+
 // Moi ung dung goi khi bat dau (Radio/Chat/HUD) de bao muc tai
 inline void SetLoadMv(int mv) {
     g_load_mv = mv;
@@ -94,6 +106,8 @@ inline void Task(void*) {
     int shown = -1;  // % dang hien thi (co tre de khong nhay +-1)
     TickType_t settle_until = 0;
     int log_tick = 0;
+    uint32_t last_banner_ms = 0;
+    uint32_t crit_since = 0;
     vTaskDelay(pdMS_TO_TICKS(300));
     while (true) {
         long sum = 0;
@@ -127,6 +141,25 @@ inline void Task(void*) {
                 shown = pct;
             }
             g_pct = shown;
+            // --- pin yeu / pin can
+            uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+            bool usb = mv >= kUsbMv;
+            bool low = !usb && shown >= 0 && shown <= kLowPct;
+            if (low && (!g_low.load() || now_ms - last_banner_ms >= kBannerEveryMs)) {
+                g_banner_until = now_ms + kBannerMs;  // moi vao muc yeu / nhac lai
+                last_banner_ms = now_ms;
+            }
+            g_low = low;
+            bool crit = !usb && mv > 0 && mv < kCritMv;
+            if (crit) {
+                if (crit_since == 0) {
+                    crit_since = now_ms | 1;
+                }
+                g_critical = (now_ms - crit_since) >= kCritHoldMs;
+            } else {
+                crit_since = 0;
+                g_critical = false;
+            }
             if (log_tick++ % 15 == 0) {
                 ESP_LOGI("EriBattery", "raw=%d pin=%dmV battery=%dmV (+%dmV bu tai) -> %d%%", raw, pin_mv, mv,
                          g_load_mv.load(), g_pct.load());
@@ -147,5 +180,12 @@ inline void Start() {
 
 inline int Percent() { return g_pct.load(); }       // -1 neu chua doc
 inline int Millivolts() { return g_mv.load(); }
+inline bool Low() { return g_low.load(); }
+inline bool Critical() { return g_critical.load(); }
+// Con trong thoi gian hien thong bao pin yeu khong
+inline bool BannerActive() {
+    uint32_t u = g_banner_until.load();
+    return u != 0 && static_cast<int32_t>(u - static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS)) > 0;
+}
 
 }  // namespace EriBattery

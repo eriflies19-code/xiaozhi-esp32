@@ -7,6 +7,7 @@
 #include "eri_mp3.h"
 #include "eri_battery.h"
 #include "eri_wifi_level.h"
+#include "eri_power.h"
 #include "eri_prefs.h"
 #include "eri_clock.h"
 #include "eri_radio_page.h"
@@ -86,6 +87,7 @@ static void StartWeb();
 
 static std::atomic<int> g_station{0};
 static std::atomic<int> g_volume{60};
+static constexpr int kLowBattMaxVol = 40;  // am luong toi da khi pin yeu (<= 10%)
 static std::atomic<uint32_t> g_gen{1};  // tang len de bao doi dai / ket noi lai
 static std::atomic<uint32_t> g_ack{0};  // task phat da xac nhan `gen` nay
 static StreamBufferHandle_t g_stream = nullptr;
@@ -226,11 +228,92 @@ static void GetTitle(char* out, size_t cap) {
     CopyStr(out, cap, g_title);
 }
 
+
+// Am luong rieng cho tung dai: luu theo ma bam cua URL ("hash:vol;..." trong NVS "rvols")
+struct StationVol {
+    uint32_t key;
+    int vol;
+};
+static std::vector<StationVol> g_vols;
+static std::mutex g_vols_mu;
+static std::atomic<uint32_t> g_switch_ms{0};  // luc doi dai gan nhat (cho hieu ung hien so dai)
+
+static uint32_t UrlKey(const std::string& url) {
+    uint32_t h = 2166136261u;  // FNV-1a
+    for (char c : url) {
+        h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
+    }
+    return h;
+}
+
+static void LoadVols() {
+    Settings st("eri", false);
+    std::string raw = st.GetString("rvols", "");
+    std::lock_guard<std::mutex> lk(g_vols_mu);
+    g_vols.clear();
+    size_t pos = 0;
+    while (pos < raw.size() && g_vols.size() < 24) {
+        size_t e = raw.find(';', pos);
+        if (e == std::string::npos) e = raw.size();
+        std::string item = raw.substr(pos, e - pos);
+        size_t c = item.find(':');
+        if (c != std::string::npos) {
+            g_vols.push_back({static_cast<uint32_t>(strtoul(item.substr(0, c).c_str(), nullptr, 16)),
+                              std::clamp(atoi(item.c_str() + c + 1), 0, 100)});
+        }
+        pos = e + 1;
+    }
+}
+
+static std::string SerializeVols() {
+    std::lock_guard<std::mutex> lk(g_vols_mu);
+    std::string r;
+    char b[24];
+    for (const auto& v : g_vols) {
+        snprintf(b, sizeof(b), "%x:%d;", static_cast<unsigned>(v.key), v.vol);
+        r += b;
+    }
+    return r;
+}
+
+// Nho am luong hien tai cho dai co URL nay
+static void RememberVol(const std::string& url, int vol) {
+    uint32_t k = UrlKey(url);
+    std::lock_guard<std::mutex> lk(g_vols_mu);
+    for (auto& v : g_vols) {
+        if (v.key == k) {
+            v.vol = vol;
+            return;
+        }
+    }
+    if (g_vols.size() >= 24) {
+        g_vols.erase(g_vols.begin());
+    }
+    g_vols.push_back({k, vol});
+}
+
+static bool RecallVol(const std::string& url, int* vol) {
+    uint32_t k = UrlKey(url);
+    std::lock_guard<std::mutex> lk(g_vols_mu);
+    for (const auto& v : g_vols) {
+        if (v.key == k) {
+            *vol = v.vol;
+            return true;
+        }
+    }
+    return false;
+}
+
 // Ghi dai/am luong vao NVS sau khi het thao tac (ghi flash lam khung CPU, gay giat am thanh)
 static void SaveSettingsCb(void*) {
     Settings settings("eri", true);
     settings.SetInt("rstation", g_station.load());
     settings.SetInt("rvol", g_volume.load());
+    std::string u;
+    if (GetUrl(g_station.load(), u)) {
+        RememberVol(u, g_volume.load());
+    }
+    settings.SetString("rvols", SerializeVols());
 }
 
 static void ScheduleSave() {
@@ -282,6 +365,9 @@ static void UiTask(void*) {
     int wifi = 0;
     int wifi_tick = 0;
     while (true) {
+        if (EriPower::IdleFor(g_last_act_ms.load(), EriPrefs::AutoOffMs())) {
+            EriPower::Sleep("Auto off", "Press 4 to wake");
+        }
         if (g_asleep.load()) {
             vTaskDelay(pdMS_TO_TICKS(200));  // man hinh tat: khong ve, khong gui I2C
             continue;
@@ -316,6 +402,7 @@ static void UiTask(void*) {
         v.phase = g_phase.load();
         v.level = g_level.load();
         v.t_ms = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        v.since_switch_ms = NowMs() - g_switch_ms.load();
         EriUi::DrawRadio(v);
         EriScreen::Present();
         vTaskDelay(pdMS_TO_TICKS(80));
@@ -894,6 +981,9 @@ static void OutputPcm(Mp3Decoder& dec, const int16_t* pcm, int bytes, int16_t* s
         frames = 1152;
     }
     int32_t vol = g_volume.load();
+    if (EriBattery::Low()) {
+        vol = std::min<int32_t>(vol, kLowBattMaxVol);  // pin yeu: ha am luong de do sut ap
+    }
     int32_t gain = vol * vol;  // 0..10000, duong cong binh phuong cho de chinh
     int32_t sum_abs = 0;
     for (int i = 0; i < frames; ++i) {
@@ -1216,6 +1306,15 @@ void Start() {
         g_station = (s >= 0 && s < Count()) ? s : 0;
         g_volume = std::clamp(static_cast<int>(settings.GetInt("rvol", 60)), 0, 100);
     }
+    LoadVols();
+    {
+        std::string u;
+        int v = 0;
+        if (GetUrl(g_station.load(), u) && RecallVol(u, &v)) {
+            g_volume = v;
+        }
+    }
+    g_switch_ms = NowMs();
 
     UiState(EriUi::kRadioConnecting, "Starting...");
     xTaskCreate(UiTask, "eri_ui", 4096, nullptr, 3, nullptr);
@@ -1240,6 +1339,17 @@ void Start() {
 
 // Doi sang dai `idx` (nut bam hoac web)
 static void SelectStation(int idx) {
+    std::string u;
+    if (GetUrl(g_station.load(), u)) {
+        RememberVol(u, g_volume.load());  // luu am luong cua dai dang nghe truoc khi doi
+    }
+    if (GetUrl(idx, u)) {
+        int v = 0;
+        if (RecallVol(u, &v)) {
+            g_volume = v;  // dai nay da co am luong rieng
+        }
+    }
+    g_switch_ms = NowMs();
     g_station = idx;
     g_gen++;
     ScheduleSave();

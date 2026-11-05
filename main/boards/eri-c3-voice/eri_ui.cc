@@ -331,6 +331,118 @@ void DrawWeather(const WeatherView& v) {
     TextC(kFontS, 64, 63, d);
 }
 
+// Icon nho 16px cho du bao 3 ngay
+static void MiniIcon(int cx, int cy, int code) {
+    SetColor(true);
+    auto cloud = [](int x, int y) {
+        Disc(x - 4, y + 1, 3);
+        Disc(x, y - 1, 4);
+        Disc(x + 4, y + 1, 3);
+        Box(x - 4, y + 1, 9, 3);
+    };
+    if (code == 0) {
+        Disc(cx, cy, 4);
+        static const int8_t kD[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+        for (int i = 0; i < 8; ++i) {
+            int dx = kD[i][0], dy = kD[i][1];
+            Pix(cx + dx * 7, cy + dy * 7);
+            if (dx == 0 || dy == 0) Pix(cx + dx * 6, cy + dy * 6);
+        }
+    } else if (code <= 3) {
+        cloud(cx, cy);
+    } else if (code == 45 || code == 48) {
+        for (int i = 0; i < 3; ++i) Line(cx - 6, cy - 4 + i * 4, cx + 6, cy - 4 + i * 4);
+    } else if (code >= 95) {
+        cloud(cx, cy - 3);
+        Line(cx + 1, cy + 3, cx - 2, cy + 6);
+        Line(cx - 2, cy + 6, cx + 2, cy + 6);
+        Line(cx + 2, cy + 6, cx - 1, cy + 9);
+    } else if ((code >= 71 && code <= 77) || code == 85 || code == 86) {
+        cloud(cx, cy - 3);
+        Pix(cx - 3, cy + 5);
+        Pix(cx + 1, cy + 7);
+        Pix(cx + 4, cy + 5);
+    } else {
+        cloud(cx, cy - 3);
+        for (int i = 0; i < 3; ++i) Line(cx - 4 + i * 4, cy + 4, cx - 5 + i * 4, cy + 8);
+    }
+}
+
+void DrawForecast(const ForecastView& v) {
+    Clear();
+    SetColor(true);
+    DrawWifi(2, 9, v.wifi);
+    TextC(kFontS, 64, 8, v.city);
+    DrawBattery(127, 1, v.batt, true, 0);
+    if (!v.valid) {
+        TextC(kFontM, 64, 36, v.msg[0] ? v.msg : "Loading weather...");
+        Hints(62, "refresh", "next");
+        return;
+    }
+    for (int i = 0; i < 3; ++i) {
+        int cx = 21 + i * 43;
+        if (i > 0) {
+            for (int y = 14; y < 56; y += 2) Pix(cx - 21, y);  // vach ngan cach cham cham
+        }
+        TextC(kFontS, cx, 22, i == 0 ? "Today" : v.day[i]);
+        MiniIcon(cx, 36, v.code[i]);
+        char b[16];
+        snprintf(b, sizeof(b), "%d/%d", v.tmax[i], v.tmin[i]);
+        TextC(kFontS, cx, 55, b);
+    }
+    Hints(63, "refresh", "next");
+}
+
+// ================================================================ Thong bao toan man hinh
+
+void DrawNotice(const char* line1, const char* line2) {
+    Clear();
+    SetColor(true);
+    RoundFrame(4, 8, kW - 8, kH - 16, 6);
+    TextC(kFontM, 64, 30, line1);
+    if (line2 != nullptr && line2[0]) {
+        TextC(kFontS, 64, 46, line2);
+    }
+}
+
+// Ve de len khung hinh dang co: o den vien trang giua man hinh
+void DrawLowBatteryBanner(int pct) {
+    SetColor(false);
+    Box(8, 16, kW - 16, 32);
+    SetColor(true);
+    RoundFrame(8, 16, kW - 16, 32, 5);
+    TextC(kFontM, 64, 32, "LOW BATTERY");
+    char b[24];
+    snprintf(b, sizeof(b), "%d  - charge soon", pct);
+    TextC(kFontS, 64, 43, b);
+}
+
+// Logo luc cap nguon: dau robot + chu ERI, thanh tien do
+void DrawSplash(uint32_t t_ms, const char* version) {
+    Clear();
+    SetColor(true);
+    // Dau robot
+    Ring(26, 30, 17, 2);
+    Box(18, 24, 4, 4);   // mat
+    Box(31, 24, 4, 4);
+    if ((t_ms / 300) % 2 == 0) {
+        Line(20, 36, 32, 36);  // mieng
+    } else {
+        Line(21, 35, 31, 35);
+        Line(21, 36, 31, 36);
+    }
+    Line(26, 12, 26, 8);
+    Disc(26, 7, 2);
+    Text(kFontM, 52, 28, "ERI");
+    Text(kFontM, 52, 44, "VOICE");
+    if (version != nullptr && version[0]) {
+        TextR(kFontS, 126, 62, version);
+    }
+    int w = static_cast<int>(std::min<uint32_t>(t_ms, 1500) * 100 / 1500);
+    Frame(2, 59, 52, 4);
+    Box(3, 60, w / 2, 2);
+}
+
 static const char* RepeatText(int r) { return r == 1 ? "Daily" : r == 2 ? "Mon-Fri" : "Once"; }
 
 void DrawAlarm(const AlarmView& v) {
@@ -428,10 +540,10 @@ void DrawAlarmRing(int h, int m, uint32_t t_ms) {
 void DrawSettings(const SettingsView& v) {
     Clear();
     SetColor(true);
-    Text(kFontS, 2, 8, v.item == 4 ? "INFO" : "Settings");
+    Text(kFontS, 2, 8, v.item == 5 ? "INFO" : "Settings");
     DrawBattery(127, 1, v.batt, true, 0);
 
-    if (v.item == 4) {
+    if (v.item == 5) {
         char b[48];
         Text(kFontS, 2, 24, "Firmware");
         TextR(kFontS, 126, 24, v.version);
@@ -444,12 +556,12 @@ void DrawSettings(const SettingsView& v) {
         return;
     }
 
-    static const char* const kLabels[4] = {"Brightness", "Screen off", "WiFi power save", "Weather city"};
-    for (int i = 0; i < 4; ++i) {
-        int base = 19 + i * 10;
+    static const char* const kLabels[5] = {"Brightness", "Screen off", "WiFi power save", "Weather city", "Auto power off"};
+    for (int i = 0; i < 5; ++i) {
+        int base = 17 + i * 9;
         bool on = (i == v.item);
         if (on) {
-            RoundBox(1, base - 8, 126, 10, 2);
+            RoundBox(1, base - 7, 126, 9, 2);
             SetColor(false);
         }
         Text(kFontS, 4, base, kLabels[i]);
@@ -469,6 +581,8 @@ void DrawSettings(const SettingsView& v) {
             TextR(kFontS, 124, base, v.soff);
         } else if (i == 3) {
             TextR(kFontS, 124, base, v.city);
+        } else if (i == 4) {
+            TextR(kFontS, 124, base, v.aoff);
         } else {
             TextR(kFontS, 124, base, v.wifi_save ? "On" : "Off");
         }
@@ -575,6 +689,47 @@ void DrawRadio(const RadioView& v) {
     char vb[8];
     snprintf(vb, sizeof(vb), "%d", v.volume);
     TextR(kFontS, 126, 62, vb);
+    // Moi chuyen dai: hien so dai to + ten (khoang 2 giay)
+    if (v.since_switch_ms < 2000) {
+        Clear();
+        SetColor(true);
+        char n[16];
+        snprintf(n, sizeof(n), "%d", v.index + 1);
+        int wn = TextWidth(kFontXL, n);
+        Text(kFontXL, 4, 42, n);
+        char of[32];
+        snprintf(of, sizeof(of), "of %d", v.count);
+        Text(kFontS, 4, 55, of);
+        // Ten dai: tu xuong dong theo tu, toi da 3 dong, trong vung ben phai so
+        const int x0 = wn + 14, maxw = kW - x0 - 2;
+        char line[3][40] = {"", "", ""};
+        int li = 0;
+        const char* p = v.name;
+        while (*p && li < 3) {
+            const char* e = p;
+            while (*e && *e != ' ') ++e;
+            char word[40];
+            int wl = std::min<int>(e - p, 39);
+            memcpy(word, p, wl);
+            word[wl] = 0;
+            char tryl[96];
+            snprintf(tryl, sizeof(tryl), "%s%s%s", line[li], line[li][0] ? " " : "", word);
+            if (TextWidth(kFontM, tryl) <= maxw || !line[li][0]) {
+                snprintf(line[li], sizeof(line[li]), "%.39s", tryl);
+            } else if (li + 1 < 3) {
+                ++li;
+                snprintf(line[li], sizeof(line[li]), "%s", word);
+            } else {
+                break;
+            }
+            p = *e ? e + 1 : e;
+        }
+        int lines = (line[2][0] ? 3 : line[1][0] ? 2 : 1);
+        int y0 = 34 - (lines - 1) * 7;
+        for (int i = 0; i < lines; ++i) {
+            Text(kFontM, x0, y0 + i * 15, line[i]);
+        }
+    }
 }
 
 // ================================================================ WAZE HUD
@@ -1050,6 +1205,9 @@ void DrawChat(const ChatView& v) {
 
     // ---- Thanh tren: WiFi | trang thai | pin
     const char* top = (v.notif != nullptr && v.notif[0]) ? v.notif : v.status;
+    if ((v.notif == nullptr || !v.notif[0]) && v.mode == kChatIdle && v.clock != nullptr && v.clock[0]) {
+        top = v.clock;  // dang cho: hien gio thay chu "Standby"
+    }
     if (top != nullptr && top[0]) {
         int w = TextWidth(kFontS, top);
         if (w <= 66) {
