@@ -23,5 +23,14 @@ static const EriStation kStations[] = {
     {"Music Lake",     "http://nap.casthost.net:8626/stream" },
     {"FOLK MUSIC", "https://ice5.somafm.com/folkfwd-128-mp3" },
     {"RADIO PARADISE", "http://stream-dc1.radioparadise.com/mp3-32"},
-    {"Black ROCK",  "https://ice5.somafm.com/brfm-128-mp3"},
-};
+    {"London Soul",  "http://londonsoulradio.out.airtime.pro:8000/londonsoulradio_a"},
+    {"RFI TV", "https://rfienvietnamien64k.ice.infomaniak.ch/rfienvietnamien-64.mp3"},
+    {"FM 90 Ha Noi", "http://14.162.146.90:8000/HANOI90"},
+    {"Cherry Music", "https://stream-176.zeno.fm/umt5gqmg3reuv"},
+    {"RVA", "https://livestream.rvasia.org:8443/Vietnamese.mp3"},
+    {"China Music", "https://lhttp.qtfm.cn/live/20500187/64k.mp3"},
+    {"2000FM Country", "http://bigrradio.cdnstream1.com/5103_128"},
+    {"181.FM", "http://listen.181fm.com/181-power_128k.mp3"},
+    {"Capital FM London", "http://media-ice.musicradio.com/CapitalMP3"},
+    {"Radio Caroline", "http://78.129.202.200:8040/;"},
+    };
